@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Listo",
+  "version": "1.0.0",
+  "identifier": "app.listo.desktop",
+  "build": {
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Listo",
+        "width": 1280,
+        "height": 860,
+        "minWidth": 380,
+        "minHeight": 520,
+        "center": true,
+        "theme": "Dark",
+        "backgroundColor": "#1e1e1e"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "shortDescription": "Listo – menedżer zadań",
+    "longDescription": "Listo – menedżer zadań z synchronizacją między komputerem i telefonem.",
+    "publisher": "Listo",
+    "category": "Productivity",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"]
+  }
+}
