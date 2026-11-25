@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Listo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "identifier": "app.listo.desktop",
   "build": {
     "frontendDist": "../dist"
@@ -10,6 +10,7 @@
     "windows": [
       {
         "title": "Listo",
+        "url": "https://dasiek07.github.io/listo/",
         "width": 1280,
         "height": 860,
         "minWidth": 380,
