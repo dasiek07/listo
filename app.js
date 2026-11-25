@@ -21,7 +21,10 @@ const COLORS = [
 const PREF_DEFAULTS = {
   startView: 'home', density: 'normal', scale: 100, anim: 'full', splash: true, confetti: true, navColors: true, showDesc: true,
   pomo: [25, 5, 15], hiddenNav: [], hiddenCards: [], voiceAuto: false, hoverFx: true,
+  navOrder: [], cardOrder: [], tileEdit: false, karma: false, navCounts: true, gcalCal: true, gcalUp: true, gcalToday: true, gcalClientId: '', calWeekNums: false,
 };
+const PREF_FALSE = ['voiceAuto', 'karma', 'tileEdit', 'calWeekNums'];   // przełączniki domyślnie wyłączone
+const PREF_REDRAW = ['karma', 'tileEdit', 'gcalCal', 'gcalUp', 'gcalToday', 'calWeekNums'];
 const REC_OPTS =[['', 'Nie powtarzaj'], ['daily', 'Codziennie'], ['weekdays', 'W dni robocze'], ['weekly', 'Co tydzień'], ['monthly', 'Co miesiąc'], ['yearly', 'Co rok']];
 const REC_LABEL = Object.fromEntries(REC_OPTS);
 const BUILTIN_FILTERS = [
@@ -217,6 +220,7 @@ function normalizeState(d) {
   if (!d.settings.mxDays && d.settings.mxDays !== 0) d.settings.mxDays = 2;
   d.settings = Object.assign({}, PREF_DEFAULTS, d.settings);
   d.habits = d.habits || [];
+  d.karma = d.karma || { points: 0, log: [], day: null };
   d.tasks.forEach(t => { t.labels = t.labels || []; t.comments = t.comments || []; });
   return d;
 }
@@ -409,7 +413,9 @@ function setView(v, fromHistory) {
   const h = '#' + viewHash(v);
   try { if (!fromHistory && location.hash !== h) history.pushState(null, '', h); } catch (e) { /* ramka bez historii */ }
   if (isNarrow()) ui.sidebar = false;
-  if (document.startViewTransition && !REDUCED && document.visibilityState === 'visible') {
+  ui.upStrip = null; ui.upCur = null;
+  // na telefonie bez przejść widoku (ciężkie dla słabszych procesorów) – zamiast tego lekki wjazd treści
+  if (document.startViewTransition && !REDUCED && document.visibilityState === 'visible' && !isNarrow()) {
     const vt = document.startViewTransition(() => render());
     [vt.ready, vt.finished, vt.updateCallbackDone].forEach(p => p && p.catch(() => {}));
   }
@@ -501,9 +507,12 @@ function renderSidebar() {
     const c = act.filter(t => t.projectId === p.id).length;
     const on = v.type === 'project' && v.id === p.id;
     const hashColor = p.color && p.color !== '#808080' ? `style="color:${p.color}"` : '';
-    return `<div class="nav-item proj ${on ? 'active' : ''}" data-act="nav" data-view="project" data-id="${p.id}" data-drop="project" data-pid="${p.id}" role="button" tabindex="0">
+    const exp = sbExpanded(p.id) && p.sections.length;
+    return `<div class="nav-item proj ${on ? 'active' : ''} ${p.sections.length ? 'has-secs' : ''}" data-act="nav" data-view="project" data-id="${p.id}" data-drop="project" data-pid="${p.id}" role="button" tabindex="0">
+      ${p.sections.length ? `<button class="sb-caret ${exp ? 'open' : ''}" data-act="sb-exp" data-id="${p.id}" title="${exp ? 'Ukryj' : 'Pokaż'} sekcje" aria-label="Pokaż sekcje">${I.chevron}</button>` : ''}
       <span class="hash" ${hashColor}>#</span><span class="name">${esc(p.name)}</span><span class="count">${c || ''}</span>
-      <button class="icon-btn more" data-act="proj-menu" data-id="${p.id}" title="Więcej" aria-label="Opcje projektu">${I.dots}</button></div>`;
+      <button class="icon-btn more" data-act="proj-menu" data-id="${p.id}" title="Więcej" aria-label="Opcje projektu">${I.dots}</button></div>
+      ${exp ? `<div class="sb-secs">${p.sections.map((s, i) => { const sc = act.filter(t => t.projectId === p.id && t.sectionId === s.id).length; return `<button class="nav-item sb-sec" data-act="sb-sec" data-pid="${p.id}" data-sid="${s.id}" style="--d:${i}" data-drop="section" data-sid2="${s.id}"><span class="sb-sec-dot" ${hashColor}></span><span class="name">${esc(s.name)}</span><span class="count">${sc || ''}</span></button>`; }).join('')}</div>` : ''}`;
   };
   const favs = userProjects().filter(p => p.favorite);
   const name = state.settings.userName || 'Ja';
@@ -541,19 +550,7 @@ function renderSidebar() {
       </div>
     </div>
     <button class="nav-item add-btn" data-act="quick-add" title="Szybkie dodawanie (Q)"><span class="add-circle">${I.plus}</span><span>Dodaj zadanie</span></button>
-    ${nav('search', I.search, 'Szukaj')}
-    ${nav('home', I.home, 'Start')}
-    <div data-drop="project" data-pid="inbox">${nav('inbox', I.inbox, 'Skrzynka', cnt.inbox)}</div>
-    ${nav('today', todayIcon(), 'Dziś', cnt.today, overdue)}
-    ${nav('upcoming', I.upcoming, 'Nadchodzące')}
-    ${nav('calendar', I.calMonth, 'Kalendarz')}
-    ${nav('matrix', I.matrix, 'Matryca')}
-    ${nav('filters', I.filters, 'Filtry i etykiety')}
-    ${nav('reports', I.pulse, 'Raportowanie')}
-    ${nav('focus', I.timer, 'Skupienie', focusBadge())}
-    ${nav('autoprio', I.bolt, 'Auto-priorytety', state.autoPrio.enabled ? (act.filter(t => t.autoSet != null).length || '✓') : '')}
-    ${nav('habits', I.habit, 'Nawyki', habitsLeftToday() || '')}
-    ${nav('completed', I.done, 'Ukończone', state.tasks.filter(t => t.completed).length)}
+    ${navOrder().map(k => { const d = NAV_DEF[k]; if (!d) return ''; const h = nav(k, d.icon(), d.label, d.count ? d.count(act, cnt) : '', k === 'today' && overdue); return k === 'inbox' ? `<div data-drop="project" data-pid="inbox">${h}</div>` : h; }).join('')}
     <div class="sb-group"><div class="sb-head"><span class="sb-title">Ulubione</span></div>${favs.map(projItem).join('')}</div>
     <div class="sb-group">
       <div class="sb-head">
@@ -920,11 +917,10 @@ function renderToday() {
 // ---------- Nadchodzące ----------
 function renderUpcoming() {
   const td = todayStr(), act = active(), ws = ui.upStart;
-  const week = [...Array(7)].map((_, i) => addDays(ws, i));
-  const md = parseDate(addDays(ws, 3));
-  const days = week.map(d => `<button class="day-chip ${d === td ? 'today' : ''}" data-act="up-day" data-date="${d}" ${d < td ? 'disabled' : ''}>
-      <span>${PL_DAYS_SHORT[dow(d)]}</span><strong>${parseDate(d).getDate()}</strong>${act.some(t => t.due === d) ? '<i class="dot"></i>' : ''}</button>`).join('');
-  let html = `<div class="up-head">${header(`${PL_MON[md.getMonth()]} ${md.getFullYear()}`, {
+  const sws = ui.upStrip || ws;
+  const md = parseDate(addDays(sws, 3));
+  const days = upStripDays(sws);
+  let html = `<div class="up-head">${header(`<span class="up-title">${PL_MON[md.getMonth()]} ${md.getFullYear()}</span>`, {
     right: `<div class="up-nav"><button class="icon-btn" data-act="up-nav" data-n="-7" ${ws <= weekStart(td) ? 'disabled' : ''} title="Poprzedni tydzień">${I.left}</button>
       <button class="btn" data-act="up-nav" data-n="0">Dziś</button>
       <button class="icon-btn" data-act="up-nav" data-n="7" title="Następny tydzień">${I.right}</button></div>`,
@@ -1565,6 +1561,13 @@ function toggleTask(id) {
     playSound('restore');
     if (ui.view.type === 'completed') rows.forEach(r => collapseRow(r.closest('.task-wrap')));
     setTimeout(() => {
+      // cofnij wpis ukończenia (statystyki, pasek dnia, karma) – inaczej wielokrotne odhaczanie liczyłoby się kilka razy
+      const at0 = (t.completedAt || Date.now()) - 120000;
+      for (let i = state.history.length - 1; i >= 0; i--) {
+        const h = state.history[i];
+        if (h.id ? h.id === t.id : (h.title === t.title && h.projectId === t.projectId && h.at >= at0)) { state.history.splice(i, 1); break; }
+      }
+      karmaOnUndo(t);
       t.completed = false; t.completedAt = null;
       let par = t.parentId && task(t.parentId);
       while (par) { if (par.completed) { par.completed = false; par.completedAt = null; } par = par.parentId && task(par.parentId); }
@@ -1582,7 +1585,7 @@ function toggleTask(id) {
   setTimeout(() => {
     if (!keep) rows.forEach(r => collapseRow(r.closest('.task-wrap')));
     setTimeout(() => {
-      state.history.push({ title: t.title, at: Date.now(), projectId: t.projectId, priority: t.priority });
+      state.history.push({ id: t.id, title: t.title, at: Date.now(), projectId: t.projectId, priority: t.priority }); karmaOnDone(t);
       if (state.history.length > 1000) state.history.splice(0, state.history.length - 1000);
       fzTaskDone(t.id);
       if (t.recurring) {
@@ -1752,6 +1755,11 @@ function openPopover(anchor, build) {
   pop.classList.remove('pop-in'); void pop.offsetWidth; pop.classList.add('pop-in');
 }
 function positionPopover(anchor) {
+  // na telefonie okienka wysuwają się od dołu jak arkusz
+  const sheet = innerWidth <= 640;
+  pop.classList.toggle('sheet', sheet);
+  document.body.classList.toggle('pop-sheet', sheet);
+  if (sheet) { pop.style.left = ''; pop.style.top = ''; return; }
   const r = anchor.getBoundingClientRect();
   pop.style.left = '0px'; pop.style.top = '0px';
   const pw = pop.offsetWidth, ph = pop.offsetHeight;
@@ -1764,11 +1772,14 @@ function positionPopover(anchor) {
 function closePopover(silent) {
   if (pop.hidden) return;
   pop.hidden = true; pop.innerHTML = '';
+  document.body.classList.remove('pop-sheet');
   const f = ui.popOnClose; ui.popOnClose = null;
   if (f && !silent) f();
 }
 document.addEventListener('mousedown', e => { if (!pop.hidden && !pop.contains(e.target)) closePopover(); });
-addEventListener('resize', () => closePopover());
+// zamykaj tylko przy zmianie szerokości – wysunięcie klawiatury na telefonie zmienia wysokość i nie może zamykać okienka
+let lastW = innerWidth;
+addEventListener('resize', () => { if (Math.abs(innerWidth - lastW) > 40) { lastW = innerWidth; closePopover(); } });
 
 // Wybór terminu – układ 1:1 z Todoist: pole z obecnym terminem, szybkie opcje,
 // przewijane miesiące z kropkami zadań, podgląd obciążenia dnia, przyciski Czas / Powtarzanie.
@@ -2221,6 +2232,8 @@ function attachRef(ref) {
         if (sync.writing || sync.pending) return renderSyncBadge();   // lokalne zmiany wygrywają
       }
       seeded = false;
+      // te same dane co lokalnie → nic nie przerysowujemy (brak „przeładowania” strony po starcie)
+      if (JSON.stringify(normalizeState(JSON.parse(JSON.stringify(d.state)))) === JSON.stringify(state)) return renderSyncBadge();
       state = normalizeState(JSON.parse(JSON.stringify(d.state)));
       persist();
       render();
@@ -2513,10 +2526,11 @@ document.addEventListener('click', e => {
     case 'sf-cancel': ui.addSection = null; render(); break;
     case 'up-nav': {
       const n = +el.dataset.n, td = todayStr();
-      ui.upStart = n === 0 ? weekStart(td) : addDays(ui.upStart, n);
+      ui.upStart = n === 0 ? weekStart(td) : addDays(ui.upStrip || ui.upStart, n);
       if (ui.upStart < weekStart(td)) ui.upStart = weekStart(td);
+      ui.upStrip = null; ui.upCur = null;
       ui.lastViewKey = null; render();
-      if (n === 0) $('#day-' + td)?.scrollIntoView({ block: 'start' });
+      const c0 = $('.content'); if (c0) c0.scrollTop = 0;
       break;
     }
     case 'up-day': {
@@ -2839,7 +2853,7 @@ function bulkAction(a, anchor) {
     playSound('done');
     setTimeout(() => {
       ts.forEach(t => {
-        state.history.push({ title: t.title, at: Date.now(), projectId: t.projectId, priority: t.priority });
+        state.history.push({ id: t.id, title: t.title, at: Date.now(), projectId: t.projectId, priority: t.priority }); karmaOnDone(t);
         if (t.recurring) t.due = nextDue(t);
         else { t.completed = true; t.completedAt = Date.now(); descendants(t.id).forEach(d => { if (!d.completed) { d.completed = true; d.completedAt = Date.now(); } }); }
       });
@@ -3406,8 +3420,9 @@ function renderHome() {
   const dayPct = Math.min(100, Math.round(doneToday / Math.max(1, doneToday + today.length + overdue.length) * 100));
   const CR = 2 * Math.PI * 38;
   let ci = 0;
-  const card = (key, cls, title, body, extra = '') => hidden.includes(key) ? '' : `<section class="hm-card ${cls}" style="--i:${ci++}"><div class="hm-card-h"><h2>${title}</h2>${extra}</div>${body}</section>`;
-  let html = `<div class="home ${tod}">
+  const cards = {};
+  const card = (key, cls, title, body, extra = '') => { if (!hidden.includes(key)) cards[key] = (i, edit) => `<section class="hm-card ${cls}" data-card="${key}" style="--i:${i}" ${edit ? 'draggable="true"' : ''}><div class="hm-card-h">${edit ? `<span class="hm-grip" title="Przeciągnij">${I.grip}</span>` : ''}<h2>${title}</h2>${edit ? `<span class="hm-mv"><button class="icon-btn" data-act="card-mv" data-k="${key}" data-d="-1" title="Wyżej">${I.up}</button><button class="icon-btn" data-act="card-mv" data-k="${key}" data-d="1" title="Niżej">${I.down}</button></span>` : extra}</div>${body}</section>`; return ''; };
+  let html = `<div class="home ${tod} ${ui.homeEdit ? 'editing' : ''}">
   <section class="hm-hero">
     <div class="hm-hero-grid">
       <div class="hm-greet"><h1>${greet}${name ? `, <span>${esc(name)}</span>` : ''}</h1>
@@ -3518,8 +3533,13 @@ function renderHome() {
       <div class="grow hm-row-main" data-act="open" data-id="${t.id}"><span class="hm-row-t">${esc(t.title)}</span><span class="hm-row-m">${fmtDateTime(t.completedAt)}${ui.fzTotals?.[t.id] ? ` · ${sz(I.timer, 11)} ${fmtDur(ui.fzTotals[t.id])}` : ''}</span></div>
       <button class="btn ghost sm" data-act="toggle" data-id="${t.id}" title="Przywróć zadanie">Przywróć</button></div></div>`).join('') || '<div class="muted small">Jeszcze nic nie ukończono.</div>',
     `<button class="icon-btn" data-act="nav" data-view="completed" title="Ukończone">${I.right}</button>`);
+  if (state.settings.karma) card('karma', 'hm-karma', `${sz(I.star, 16)} Karma`, karmaCardBody(), `<button class="icon-btn" data-act="pref-open" data-t="productivity" title="Szczegóły">${I.right}</button>`);
+  const evToday = gcalEventsOn(td);
+  if (evToday.length) card('events', 'hm-events', `${sz(I.calMonth, 16)} Wydarzenia dziś`, evToday.map(e => `<div class="hm-ev" style="--c:${e.color || 'var(--qi-b)'}"><span class="hm-ev-t">${e.time || 'cały dzień'}</span><span class="grow">${esc(e.title)}</span></div>`).join(''), `<button class="icon-btn" data-act="nav" data-view="calendar" title="Kalendarz">${I.right}</button>`);
+  const edit = !!ui.homeEdit;
+  html += cardOrder(Object.keys(cards)).map((k, i) => cards[k](ci + i, edit)).join('');
   html += `</div>
-    <div class="hm-foot"><button data-act="nav" data-view="prefs">${sz(I.gear, 14)} Dostosuj kafelki Startu</button><button data-act="nav" data-view="guide">${sz(I.book, 14)} Poradnik i skróty</button><button data-act="voice">${sz(I.mic, 14)} Dodaj głosem (V)</button></div></div>`;
+    <div class="hm-foot">${state.settings.tileEdit ? `<button data-act="home-edit" class="${edit ? 'on' : ''}">${sz(I.grip, 14)} ${edit ? 'Gotowe – zapisz układ' : 'Ułóż kafelki'}</button>` : ''}<button data-act="nav" data-view="prefs">${sz(I.gear, 14)} Dostosuj kafelki Startu</button><button data-act="nav" data-view="guide">${sz(I.book, 14)} Poradnik i skróty</button><button data-act="voice">${sz(I.mic, 14)} Dodaj głosem (V)</button></div></div>`;
   if (ui.stagger) setTimeout(countUp, 0);
   return html;
 }
@@ -3903,13 +3923,16 @@ function showSplash(force) {
     <div class="ls-skip">Kliknij, aby pominąć</div>`;
   document.body.appendChild(el);
   const app = $('#app');
-  app.classList.add('app-pre');
+  // aplikacja rysuje się pod spodem raz, a jej animacje wejścia czekają wstrzymane – bez przeładowania po animacji
+  app.classList.add('app-pre', 'launch', 'launch-wait');
+  const lite = innerWidth < 760 || matchMedia('(pointer: coarse)').matches;
+  el.classList.toggle('lite', lite);
   // gwiazdy / pyłki w tle
   const cv = $('.ls-stars', el), cx = cv.getContext('2d');
   let W, H, raf = 0, alive = true;
-  const fit = () => { const r = devicePixelRatio || 1; W = cv.width = innerWidth * r; H = cv.height = innerHeight * r; };
+  const fit = () => { const r = Math.min(devicePixelRatio || 1, lite ? 1 : 2); W = cv.width = innerWidth * r; H = cv.height = innerHeight * r; };
   fit();
-  const dots = [...Array(90)].map(() => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.6 + .3, s: Math.random() * .00025 + .00008, p: Math.random() * 6.28 }));
+  const dots = [...Array(lite ? 36 : 90)].map(() => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.6 + .3, s: Math.random() * .00025 + .00008, p: Math.random() * 6.28 }));
   const sparks = [];
   const draw = t => {
     if (!alive) return;
@@ -3948,14 +3971,23 @@ function showSplash(force) {
   const done = () => {
     if (out) return; out = true;
     timers.forEach(clearTimeout);
+    launchIntroPrep();
+    // logo odlatuje na swoje miejsce w aplikacji
+    const logo = $('.ls-logo', el), lr = logo.getBoundingClientRect();
+    const tgt = [...$$('#sidebar .add-circle, #tabbar [data-view="home"] svg, .hm-greet h1')].find(n => { const r = n.getBoundingClientRect(); return r.width && r.left >= 0 && r.left < innerWidth; });
+    if (tgt && lr.width) {
+      const fly = logo.cloneNode(true); fly.className = 'ls-fly'; document.body.appendChild(fly);
+      Object.assign(fly.style, { left: lr.left + 'px', top: lr.top + 'px', width: lr.width + 'px', height: lr.height + 'px' });
+      const tr = tgt.getBoundingClientRect(), s = Math.max(.18, Math.min(tr.width, tr.height) / lr.width);
+      requestAnimationFrame(() => requestAnimationFrame(() => { fly.style.transform = `translate(${tr.left + tr.width / 2 - (lr.left + lr.width / 2)}px, ${tr.top + tr.height / 2 - (lr.top + lr.height / 2)}px) scale(${s})`; fly.classList.add('go'); }));
+      setTimeout(() => { fly.remove(); tgt.classList.add('ls-land'); setTimeout(() => tgt.classList.remove('ls-land'), 700); }, 900);
+      logo.style.visibility = 'hidden';
+    }
     el.classList.add('out');
-    app.classList.remove('app-pre');
-    // jednorazowe, wyjątkowe wejście aplikacji po uruchomieniu
-    app.classList.add('launch');
-    ui.stagger = true; render();
-    $$('#sidebar > *, #sidebar .nav-item').forEach((n, i) => n.style.setProperty('--n', Math.min(i, 22)));
+    app.classList.remove('app-pre', 'launch-wait');
+    setTimeout(countUp, 900);
     setTimeout(() => { alive = false; cancelAnimationFrame(raf); el.remove(); }, 1100);
-    setTimeout(() => app.classList.remove('launch'), 2800);
+    setTimeout(() => app.classList.remove('launch'), 3400);
   };
   el.addEventListener('click', done);
   addEventListener('keydown', function sk(e) { if (out) { removeEventListener('keydown', sk); return; } if (['Escape', 'Enter', ' '].includes(e.key)) { e.preventDefault(); done(); } });
@@ -3971,7 +4003,7 @@ document.addEventListener('click', e => {
   switch (a) {
     case 'voice': e.preventDefault(); openVoice(); break;
     case 'pref': { let v = el.dataset.v; if (['scale', 'mxDays'].includes(k)) v = +v; if (String(s[k]) !== String(v)) setPref(k, v, el); break; }
-    case 'pref-tg': setPref(k, !(k === 'voiceAuto' ? !!s[k] : s[k] !== false), el); break;
+    case 'pref-tg': { const v = !(PREF_FALSE.includes(k) ? !!s[k] : s[k] !== false); if (PREF_REDRAW.includes(k)) { state.settings[k] = v; ui.quiet = true; commit(); if (k === 'karma' && v) karmaDaily(); } else setPref(k, v, el); break; }
     case 'pref-step': {
       const d = +el.dataset.d;
       if (k === 'pomo') { const i = +el.dataset.i, arr = [...s.pomo]; arr[i] = Math.max(1, Math.min(120, arr[i] + d)); setPref('pomo', arr, el); }
@@ -4182,6 +4214,516 @@ document.addEventListener('click', async e => {
   await installEvt.userChoice.catch(() => null);
   installEvt = null; render();
 });
+// ================================================================
+//  v12 – kolejność menu, sekcje projektów, kafelki Startu, Nadchodzące, Kalendarz,
+//        nowe Ustawienia, Karma, Kalendarz Google, interfejs na telefon
+// ================================================================
+Object.assign(I, {
+  grip: sv('<circle cx="9" cy="6" r="1.3"/><circle cx="15" cy="6" r="1.3"/><circle cx="9" cy="12" r="1.3"/><circle cx="15" cy="12" r="1.3"/><circle cx="9" cy="18" r="1.3"/><circle cx="15" cy="18" r="1.3"/>', 16),
+  up: sv('<path d="M6 14l6-6 6 6"/>', 16),
+  down: sv('<path d="M6 10l6 6 6-6"/>', 16),
+  star: sv('<path d="M12 3.5l2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.8z"/>', 18),
+  google: '<svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.8h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.3z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22z"/><path fill="#FBBC05" d="M6.4 14c-.2-.6-.3-1.3-.3-2s.1-1.4.3-2V7.4H3.1a10 10 0 0 0 0 9.2z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.8-2.8A10 10 0 0 0 3.1 7.4L6.4 10c.8-2.3 3-4.1 5.6-4.1z"/></svg>',
+});
+
+// ---------- menu boczne: definicje, kolejność, widoczność ----------
+const NAV_DEF = {
+  search: { label: 'Szukaj', icon: () => I.search },
+  home: { label: 'Start', icon: () => I.home },
+  inbox: { label: 'Skrzynka', icon: () => I.inbox, count: (a, c) => c.inbox },
+  today: { label: 'Dziś', icon: () => todayIcon(), count: (a, c) => c.today },
+  upcoming: { label: 'Nadchodzące', icon: () => I.upcoming },
+  calendar: { label: 'Kalendarz', icon: () => I.calMonth },
+  matrix: { label: 'Matryca', icon: () => I.matrix },
+  filters: { label: 'Filtry i etykiety', icon: () => I.filters },
+  reports: { label: 'Raportowanie', icon: () => I.pulse },
+  focus: { label: 'Skupienie', icon: () => I.timer, count: () => focusBadge() },
+  autoprio: { label: 'Auto-priorytety', icon: () => I.bolt, count: a => state.autoPrio.enabled ? (a.filter(t => t.autoSet != null).length || '✓') : '' },
+  habits: { label: 'Nawyki', icon: () => I.habit, count: () => habitsLeftToday() || '' },
+  completed: { label: 'Ukończone', icon: () => I.done, count: () => state.tasks.filter(t => t.completed).length },
+};
+function navOrder() {
+  const o = (state.settings.navOrder || []).filter(k => NAV_DEF[k]);
+  Object.keys(NAV_DEF).forEach(k => { if (!o.includes(k)) o.push(k); });
+  return o;
+}
+function sbExpanded(id, set) {
+  let a = [];
+  try { a = JSON.parse(localStorage.getItem('listo-sb-exp') || '[]'); } catch (e) { /* */ }
+  if (set === undefined) return a.includes(id);
+  a = a.filter(x => x !== id); if (set) a.push(id);
+  try { localStorage.setItem('listo-sb-exp', JSON.stringify(a)); } catch (e) { /* */ }
+}
+
+// ---------- kafelki Startu: własna kolejność ----------
+function cardOrder(keys) {
+  const o = state.settings.cardOrder || [];
+  return [...keys].sort((a, b) => (o.indexOf(a) < 0 ? 99 + keys.indexOf(a) : o.indexOf(a)) - (o.indexOf(b) < 0 ? 99 + keys.indexOf(b) : o.indexOf(b)));
+}
+function moveCard(key, toKey, d) {
+  const vis = $$('.hm-masonry .hm-card').map(c => c.dataset.card);
+  const all = cardOrder([...new Set([...vis, ...(state.settings.cardOrder || [])])]);
+  const i = all.indexOf(key);
+  if (i < 0) return;
+  all.splice(i, 1);
+  let j = toKey ? all.indexOf(toKey) : i + d;
+  j = Math.max(0, Math.min(all.length, j));
+  all.splice(j, 0, key);
+  state.settings.cardOrder = all;
+  ui.quiet = true; ui.movedCard = key;
+  commit();
+}
+let cardDrag = null;
+document.addEventListener('dragstart', e => {
+  const c = e.target.closest?.('.home.editing .hm-card');
+  if (!c) return;
+  cardDrag = c.dataset.card; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', cardDrag);
+  requestAnimationFrame(() => c.classList.add('dragging'));
+});
+document.addEventListener('dragover', e => {
+  if (!cardDrag) return;
+  const c = e.target.closest('.hm-card');
+  $$('.hm-card.drop-to').forEach(x => x !== c && x.classList.remove('drop-to'));
+  if (c && c.dataset.card !== cardDrag) { e.preventDefault(); c.classList.add('drop-to'); }
+});
+document.addEventListener('drop', e => {
+  if (!cardDrag) return;
+  const c = e.target.closest('.hm-card'), k = cardDrag;
+  cardDrag = null;
+  if (!c || c.dataset.card === k) return;
+  e.preventDefault(); moveCard(k, c.dataset.card);
+});
+document.addEventListener('dragend', () => { cardDrag = null; $$('.hm-card.drop-to, .hm-card.dragging').forEach(x => x.classList.remove('drop-to', 'dragging')); });
+
+// ---------- Nadchodzące: pasek dat śledzi przewijanie ----------
+function upStripDays(sws) {
+  const td = todayStr(), act = active();
+  return [...Array(7)].map((_, i) => addDays(sws, i)).map(d => `<button class="day-chip ${d === td ? 'today' : ''} ${d === ui.upCur ? 'cur' : ''}" data-act="up-day" data-date="${d}" ${d < td ? 'disabled' : ''}>
+      <span>${PL_DAYS_SHORT[dow(d)]}</span><strong>${parseDate(d).getDate()}</strong>${act.some(t => t.due === d) || gcalEventsOn(d, 'gcalUp').length ? '<i class="dot"></i>' : ''}</button>`).join('');
+}
+function upTrack() {
+  if (ui.view.type !== 'upcoming') return;
+  const c = $('.content'), head = $('.up-head');
+  if (!c || !head) return;
+  const lim = head.getBoundingClientRect().bottom + 6;
+  let cur = null;
+  for (const g of $$('.group[id^="day-"]', c)) { if (g.getBoundingClientRect().bottom > lim) { cur = g.id.slice(4); break; } }
+  if (!cur || cur === ui.upCur) return;
+  ui.upCur = cur;
+  const strip = $('.week-strip'), sws = weekStart(cur), old = ui.upStrip || ui.upStart;
+  if (!strip) return;
+  if (sws !== old) {
+    ui.upStrip = sws;
+    strip.innerHTML = upStripDays(sws);
+    strip.classList.remove('sl', 'sr'); void strip.offsetWidth; strip.classList.add(sws > old ? 'sl' : 'sr');
+    const md = parseDate(addDays(sws, 3)), t = $('.up-title');
+    if (t) { t.textContent = `${PL_MON[md.getMonth()]} ${md.getFullYear()}`; t.classList.remove('flip'); void t.offsetWidth; t.classList.add('flip'); }
+  } else $$('.day-chip', strip).forEach(b => b.classList.toggle('cur', b.dataset.date === cur));
+}
+
+// ---------- Karma (domyślnie wyłączona) ----------
+const KARMA_LV = [[0, 'Początkujący', '🌱'], [300, 'Nowicjusz', '🌿'], [900, 'Uczeń', '📘'], [2000, 'Praktyk', '⚙️'], [4000, 'Profesjonalista', '💼'], [7500, 'Ekspert', '🎯'], [12500, 'Mistrz', '🏆'], [20000, 'Arcymistrz', '👑'], [32000, 'Oświecony', '✨']];
+const K = () => state.karma || (state.karma = { points: 0, log: [], day: null });
+function karmaLevel(p) {
+  let i = 0; while (i + 1 < KARMA_LV.length && p >= KARMA_LV[i + 1][0]) i++;
+  return { i, name: KARMA_LV[i][1], emo: KARMA_LV[i][2], cur: KARMA_LV[i][0], next: KARMA_LV[i + 1] ? KARMA_LV[i + 1][0] : null };
+}
+function karmaAdd(d, why, id, kind) {
+  if (!state.settings.karma || !d) return;
+  const k = K(), before = karmaLevel(k.points).i;
+  k.points = Math.max(0, Math.round(k.points + d));
+  k.log.unshift({ at: Date.now(), d: Math.round(d), why, id: id || null, kind });
+  if (k.log.length > 400) k.log.length = 400;
+  const after = karmaLevel(k.points).i;
+  if (after > before) setTimeout(() => { celebrate(); toast(`${KARMA_LV[after][2]} Nowy poziom karmy: ${KARMA_LV[after][1]}!`); }, 700);
+  else if (after < before) setTimeout(() => toast(`Karma spadła do poziomu: ${KARMA_LV[after][1]}`), 700);
+}
+function karmaOnDone(t) {
+  if (!state.settings.karma) return;
+  const td = todayStr(), lv = karmaLevel(K().points).i, mult = Math.max(.6, 1 - lv * .05);
+  let p = 4 + (t.priority < 4 ? 4 - t.priority : 0);
+  if (t.due) p += t.due >= td ? 3 : -2;
+  karmaAdd(Math.max(1, p * mult), t.title, t.id, 'done');
+}
+function karmaOnUndo(t) {
+  if (!state.settings.karma) return;
+  const e = K().log.find(l => l.id === t.id && l.kind === 'done');
+  if (e) karmaAdd(-e.d, `Cofnięto: ${t.title}`, t.id, 'undo');
+}
+function karmaDaily() {
+  if (!state.settings.karma) return;
+  const k = K(), td = todayStr();
+  if (k.day === td) return;
+  if (!k.day) { k.day = td; save(); return; }
+  const yd = addDays(td, -1), lv = karmaLevel(k.points).i, pen = 1 + lv * .1, goal = state.settings.dailyGoal || 5;
+  const byDay = {}; state.history.forEach(h => { const d = fmtDate(new Date(h.at)); byDay[d] = (byDay[d] || 0) + 1; });
+  const done = byDay[yd] || 0;
+  if (done >= goal) karmaAdd(10, 'Dzienny cel osiągnięty', null, 'goal');
+  let streak = 0; for (let d = yd; (byDay[d] || 0) >= goal; d = addDays(d, -1)) streak++;
+  if (streak >= 2) karmaAdd(Math.min(streak * 2, 20), `Seria ${streak} dni z celem`, null, 'streak');
+  const created = state.tasks.filter(t => t.createdAt && fmtDate(new Date(t.createdAt)) === yd).length;
+  if (created) karmaAdd(Math.min(created, 10), `Planowanie – dodano ${created} ${plural(created, 'zadanie', 'zadania', 'zadań')}`, null, 'add');
+  const od = active().filter(t => t.due && t.due < td).length;
+  if (od) karmaAdd(-Math.min(Math.round(od * 2 * pen), 30), `Zaległe zadania: ${od}`, null, 'overdue');
+  if (!done) karmaAdd(-Math.round(3 * pen), 'Dzień bez ukończonego zadania', null, 'idle');
+  k.day = td; save();
+}
+function karmaSpark(days = 14) {
+  const td = todayStr(), per = [...Array(days)].map((_, i) => addDays(td, i - days + 1)).map(d => K().log.filter(l => fmtDate(new Date(l.at)) === d).reduce((a, l) => a + l.d, 0));
+  const m = Math.max(1, ...per.map(Math.abs));
+  return `<div class="k-spark">${per.map((v, i) => `<i class="${v < 0 ? 'neg' : ''}" style="--h:${Math.max(4, Math.abs(v) / m * 100).toFixed(0)}%;--d:${i}" title="${v > 0 ? '+' : ''}${v}"></i>`).join('')}</div>`;
+}
+function karmaCardBody() {
+  const k = K(), L = karmaLevel(k.points), pct = L.next ? Math.round((k.points - L.cur) / (L.next - L.cur) * 100) : 100;
+  return `<div class="k-head"><span class="k-emo">${L.emo}</span><div class="grow"><b>${L.name}</b><span class="muted small">${k.points} pkt${L.next ? ` · do następnego ${L.next - k.points}` : ' · najwyższy poziom'}</span></div></div>
+    <div class="k-bar"><i style="--w:${pct}%"></i></div>${karmaSpark(10)}
+    ${k.log.slice(0, 3).map(l => `<div class="k-log"><span class="${l.d < 0 ? 'neg' : 'pos'}">${l.d > 0 ? '+' : ''}${l.d}</span><span class="grow">${esc(l.why)}</span></div>`).join('')}`;
+}
+
+// ---------- Kalendarz Google ----------
+const GC = { token: null, exp: 0, tc: null, cid: '' };
+const gcalCid = () => (CFG.googleClientId || state.settings.gcalClientId || '').trim();
+function gcalCache() { try { return JSON.parse(localStorage.getItem('listo-gcal') || '{}'); } catch (e) { return {}; } }
+function gcalEventsOn(d, where) {
+  if (!state.settings.gcalOn || (where && state.settings[where] === false)) return [];
+  return (gcalCache().events || []).filter(e => e.date === d || (e.end && e.date < d && d < e.end)).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+}
+function gcalPreload() {
+  if (!gcalCid() || window.google?.accounts?.oauth2 || gcalPreload.busy) return;
+  gcalPreload.busy = true;
+  loadScript('https://accounts.google.com/gsi/client').then(() => { gcalPreload.busy = false; }).catch(() => { gcalPreload.busy = false; });
+}
+function gcalToken(cb) {
+  const cid = gcalCid();
+  if (!cid) { ui.prefTab = 'calendars'; setView({ type: 'prefs' }); toast('Najpierw wklej identyfikator klienta Google (Client ID)'); return; }
+  if (GC.token && Date.now() < GC.exp) return cb();
+  if (!window.google?.accounts?.oauth2) { gcalPreload(); toast('Łączę z Google… kliknij jeszcze raz za chwilę'); return; }
+  if (!GC.tc || GC.cid !== cid) {
+    GC.cid = cid;
+    GC.tc = google.accounts.oauth2.initTokenClient({ client_id: cid, scope: 'https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/calendar.events', callback: () => {} });
+  }
+  GC.tc.callback = r => {
+    if (r.error) { toast('Nie połączono z Google: ' + r.error); return; }
+    GC.token = r.access_token; GC.exp = Date.now() + (Math.max(60, r.expires_in || 3600) - 60) * 1000;
+    if (!state.settings.gcalOn) { state.settings.gcalOn = true; save(); }
+    cb();
+  };
+  GC.tc.requestAccessToken({ prompt: state.settings.gcalOn ? '' : 'consent' });
+}
+async function gcalApi(path, opt = {}) {
+  const r = await fetch('https://www.googleapis.com/calendar/v3/' + path, Object.assign({}, opt, { headers: Object.assign({ Authorization: 'Bearer ' + GC.token, 'Content-Type': 'application/json' }, opt.headers || {}) }));
+  if (r.status === 401) { GC.token = null; throw new Error('Sesja Google wygasła – kliknij „Odśwież”'); }
+  if (!r.ok) throw new Error('Google: ' + r.status);
+  return r.json();
+}
+function gcalSync() {
+  gcalToken(async () => {
+    try {
+      toast('Pobieram wydarzenia z Kalendarza Google…');
+      const list = await gcalApi('users/me/calendarList?minAccessRole=reader');
+      const cals = (list.items || []).filter(c => c.selected !== false);
+      const tMin = new Date(Date.now() - 31 * 864e5).toISOString(), tMax = new Date(Date.now() + 120 * 864e5).toISOString();
+      const events = [];
+      for (const c of cals.slice(0, 12)) {
+        const res = await gcalApi(`calendars/${encodeURIComponent(c.id)}/events?singleEvents=true&orderBy=startTime&maxResults=400&timeMin=${encodeURIComponent(tMin)}&timeMax=${encodeURIComponent(tMax)}`);
+        (res.items || []).forEach(ev => {
+          if (ev.status === 'cancelled') return;
+          const all = !!ev.start?.date, sd = all ? ev.start.date : fmtDate(new Date(ev.start.dateTime)), ed = all ? ev.end?.date : null;
+          events.push({ id: ev.id, title: ev.summary || '(bez tytułu)', date: sd, end: ed && diffDays(ed, sd) > 1 ? ed : null, time: all ? '' : nowHMof(ev.start.dateTime), endTime: all ? '' : nowHMof(ev.end?.dateTime), color: c.backgroundColor || '', cal: c.summary || '', link: ev.htmlLink || '' });
+        });
+      }
+      localStorage.setItem('listo-gcal', JSON.stringify({ at: Date.now(), events, cals: cals.map(c => ({ name: c.summary, color: c.backgroundColor })) }));
+      ui.quiet = true; render();
+      toast(`📅 Zsynchronizowano ${events.length} ${plural(events.length, 'wydarzenie', 'wydarzenia', 'wydarzeń')} z ${cals.length} ${plural(cals.length, 'kalendarza', 'kalendarzy', 'kalendarzy')}`);
+    } catch (e) { toast(String(e.message || e)); }
+  });
+}
+const nowHMof = iso => { if (!iso) return ''; const d = new Date(iso); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+function gcalAddTask(t) {
+  gcalToken(async () => {
+    try {
+      const body = { summary: t.title, description: (t.description || '') + '\n\n— dodane z Listo' };
+      if (t.time) { const s = new Date(`${t.due}T${t.time}:00`); body.start = { dateTime: s.toISOString() }; body.end = { dateTime: new Date(s.getTime() + 30 * 6e4).toISOString() }; }
+      else { body.start = { date: t.due || todayStr() }; body.end = { date: addDays(t.due || todayStr(), 1) }; }
+      const ev = await gcalApi('calendars/primary/events', { method: 'POST', body: JSON.stringify(body) });
+      t.gcalId = ev.id; save(); toast('📅 Dodano do Kalendarza Google'); gcalSync();
+    } catch (e) { toast(String(e.message || e)); }
+  });
+}
+function gcalDisconnect() {
+  try { if (GC.token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(GC.token, () => {}); } catch (e) { /* */ }
+  GC.token = null; state.settings.gcalOn = false;
+  try { localStorage.removeItem('listo-gcal'); } catch (e) { /* */ }
+  ui.quiet = true; commit(); toast('Odłączono Kalendarz Google');
+}
+
+// ---------- Kalendarz – nowy wygląd ----------
+function calItems(d) {
+  const ts = active().filter(t => t.due === d).sort(byDue);
+  return { ts, ev: gcalEventsOn(d, 'gcalCal') };
+}
+function renderCalendar() {
+  const td = todayStr(), mode = ui.calMode || 'month';
+  const sel = ui.calSel || td;
+  let title, grid = '';
+  const navBtns = (act) => `<div class="cal2-nav"><button class="icon-btn" data-act="${act}" data-n="-1" title="Wstecz">${I.left}</button><button class="btn" data-act="${act}" data-n="0">Dziś</button><button class="icon-btn" data-act="${act}" data-n="1" title="Dalej">${I.right}</button></div>`;
+  const chip = (t) => `<div class="cal2-chip" draggable="true" data-act="open" data-id="${t.id}" style="--c:var(--p${t.priority})" title="${esc(t.title)}"><i></i><span>${t.time ? `<b>${t.time}</b> ` : ''}${esc(t.title)}</span></div>`;
+  const evChip = e => `<div class="cal2-chip ev" style="--c:${e.color || 'var(--qi-b)'}" title="${esc(e.cal + ': ' + e.title)}"><i></i><span>${e.time ? `<b>${e.time}</b> ` : ''}${esc(e.title)}</span></div>`;
+  if (mode === 'week') {
+    const ws = ui.calWeek || weekStart(td), days = [...Array(7)].map((_, i) => addDays(ws, i));
+    const a = parseDate(ws), b = parseDate(days[6]);
+    title = `${a.getDate()} ${PL_MON_SHORT[a.getMonth()]} – ${b.getDate()} ${PL_MON_SHORT[b.getMonth()]} ${b.getFullYear()}`;
+    grid = `<div class="cal2-week">${days.map((d, i) => { const { ts, ev } = calItems(d); return `<div class="cal2-wcol ${d === td ? 'today' : ''} ${d === sel ? 'sel' : ''}" data-act="cal-day" data-date="${d}" data-drop="day" style="--i:${i}">
+      <div class="cal2-wh"><span>${PL_DAYS_SHORT[dow(d)]}</span><b>${parseDate(d).getDate()}</b></div>
+      <div class="cal2-wl">${ev.map(evChip).join('')}${ts.map(chip).join('') || (ev.length ? '' : '<span class="cal2-free">wolne</span>')}</div></div>`; }).join('')}</div>`;
+  } else {
+    const base = ui.calMonth || td.slice(0, 8) + '01', first = parseDate(base), y = first.getFullYear(), m = first.getMonth();
+    title = `${PL_MON[m]} ${y}`;
+    const start = weekStart(base), end = addDays(weekStart(fmtDate(new Date(y, m + 1, 0))), 6);
+    let maxN = 1; for (let d = start; d <= end; d = addDays(d, 1)) maxN = Math.max(maxN, active().filter(t => t.due === d).length);
+    let cells = '', i = 0;
+    for (let d = start; d <= end; d = addDays(d, 1)) {
+      const { ts, ev } = calItems(d), n = ts.length + ev.length, w = dow(d);
+      const items = [...ev.map(evChip), ...ts.map(chip)];
+      if (w === 1 && state.settings.calWeekNums) cells += `<div class="cal2-wn">${isoWeek(d)}</div>`;
+      cells += `<div class="cal2-cell ${parseDate(d).getMonth() === m ? '' : 'other'} ${d === td ? 'today' : ''} ${d === sel ? 'sel' : ''} ${w === 0 || w === 6 ? 'we' : ''} ${d < td ? 'past' : ''}" data-act="cal-day" data-date="${d}" data-drop="day" style="--i:${Math.min(i++, 41)};--load:${(ts.length / maxN).toFixed(2)}">
+        <div class="cal2-top"><span class="cal2-num">${parseDate(d).getDate()}</span>${n ? `<span class="cal2-n">${n}</span>` : ''}</div>
+        <div class="cal2-items">${items.slice(0, 3).join('')}${items.length > 3 ? `<span class="cal2-more">+${items.length - 3}</span>` : ''}</div>
+        <div class="cal2-dots">${[...ev.map(e => `<i style="--c:${e.color || 'var(--qi-b)'}"></i>`), ...ts.map(t => `<i style="--c:var(--p${t.priority})"></i>`)].slice(0, 5).join('')}</div></div>`;
+    }
+    grid = `<div class="cal2-wd ${state.settings.calWeekNums ? 'wn' : ''}">${state.settings.calWeekNums ? '<span></span>' : ''}${['Pon', 'Wt', 'Śr', 'Czw', 'Pt', 'Sob', 'Nd'].map(x => `<span>${x}</span>`).join('')}</div><div class="cal2-month ${state.settings.calWeekNums ? 'wn' : ''}">${cells}</div>`;
+  }
+  const monthTasks = active().filter(t => t.due && (mode === 'week' ? false : t.due.slice(0, 7) === (ui.calMonth || td).slice(0, 7))).length;
+  let html = header(`<span class="cal2-title">${title}</span>`, { icon: sz(I.calMonth, 24), iconCls: 'tile', barTitle: 'Kalendarz',
+    sub: mode === 'month' ? `${monthTasks} ${plural(monthTasks, 'zadanie', 'zadania', 'zadań')} w tym miesiącu${state.settings.gcalOn ? ' · z Kalendarzem Google' : ''}` : 'Widok tygodnia',
+    right: `<div class="seg-inline"><button class="${mode === 'month' ? 'sel' : ''}" data-act="cal-mode" data-v="month">Miesiąc</button><button class="${mode === 'week' ? 'sel' : ''}" data-act="cal-mode" data-v="week">Tydzień</button></div>${navBtns(mode === 'week' ? 'calw-nav' : 'cal-nav')}` });
+  // panel wybranego dnia
+  const { ts, ev } = calItems(sel), n = diffDays(sel, td), rel = n === 0 ? 'Dziś' : n === 1 ? 'Jutro' : n === -1 ? 'Wczoraj' : '';
+  const sd = parseDate(sel);
+  const agenda = `<aside class="cal2-agenda group" data-drop="day" data-date="${sel}">
+    <div class="cal2-ah"><div class="cal2-big">${sd.getDate()}</div><div><b>${cap(PL_DAYS[sd.getDay()])}${rel ? ` · ${rel}` : ''}</b><span>${PL_MON[sd.getMonth()]} ${sd.getFullYear()} · ${ts.length} ${plural(ts.length, 'zadanie', 'zadania', 'zadań')}${ev.length ? ` · ${ev.length} ${plural(ev.length, 'wydarzenie', 'wydarzenia', 'wydarzeń')}` : ''}</span></div></div>
+    ${ev.length ? `<div class="cal2-evs">${ev.map(e => `<a class="cal2-ev" ${e.link && /^https:\/\//.test(e.link) ? `href="${esc(e.link)}" target="_blank" rel="noopener"` : ''} style="--c:${e.color || 'var(--qi-b)'}"><span class="cal2-evt">${e.time ? `${e.time}${e.endTime ? '–' + e.endTime : ''}` : 'Cały dzień'}</span><span class="grow">${esc(e.title)}</span><span class="cal2-evc">${esc(e.cal)}</span></a>`).join('')}</div>` : ''}
+    ${ts.map(t => taskRow(t, { showProject: true })).join('')}
+    ${addTaskButton('day:' + sel, { due: sel })}
+    ${!ts.length && !ev.length ? `<div class="cal2-empty">${sz(I.calMonth, 26)}<span>Brak planów na ten dzień</span></div>` : ''}
+  </aside>`;
+  html += `<div class="cal2 ${mode}"><div class="cal2-main">${grid}</div>${agenda}</div>`;
+  return html;
+}
+function isoWeek(s) { const d = parseDate(s); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const w1 = new Date(d.getFullYear(), 0, 4); return 1 + Math.round(((d - w1) / 864e5 - 3 + (w1.getDay() + 6) % 7) / 7); }
+
+// ---------- Ustawienia z zakładkami ----------
+const PREF_TABS = [['general', 'Ogólne', () => I.gear], ['theme', 'Motyw', () => I.moon], ['sidebar', 'Pasek boczny', () => I.sidebar], ['productivity', 'Produktywność', () => I.pulse], ['calendars', 'Kalendarze', () => I.calMonth], ['account', 'Konto', () => I.cloud]];
+function renderPrefs() {
+  const s = state.settings, tab = ui.prefTab || 'general';
+  let html = header('Ustawienia', { icon: sz(I.gear, 24), iconCls: 'tile', sub: 'Domyślne wartości to obecny wygląd aplikacji – w każdej chwili możesz do nich wrócić.' });
+  const sec = (i, title, body, extra = '') => `<section class="pf-card" style="--i:${i}"><h3>${title}${extra}</h3>${body}</section>`;
+  let body = '';
+  if (tab === 'general') {
+    const cardOpts = [['next', 'Na teraz'], ['today', 'Dziś'], ['habits', 'Nawyki dziś'], ['week', 'Najbliższe 7 dni'], ['focus', 'Skupienie'], ['stats', 'Twój rytm'], ['proj', 'Projekty'], ['mx', 'Matryca'], ['done', 'Ostatnio ukończone'], ['karma', 'Karma'], ['events', 'Wydarzenia dziś']];
+    body = sec(0, 'Profil', prefRow('Twoje imię', 'Widoczne w powitaniu', `<input class="pf-in" data-k="userName" value="${esc(s.userName || '')}" maxlength="40" aria-label="Imię">`)
+      + prefRow('Widok po uruchomieniu', 'Co widzisz po otwarciu aplikacji', segBtns('startView', s.startView, [['home', 'Start'], ['today', 'Dziś'], ['inbox', 'Skrzynka'], ['upcoming', 'Plan']])))
+      + sec(1, 'Lista zadań', prefRow('Gęstość listy', 'Odstępy między zadaniami', segBtns('density', s.density, [['compact', 'Zwarta'], ['normal', 'Normalna'], ['roomy', 'Przestronna']]))
+      + prefRow('Opisy zadań na liście', 'Pierwsza linia opisu pod tytułem', swBtn(s.showDesc !== false, 'showDesc'))
+      + prefRow('Dźwięki', 'Przy odhaczaniu i końcu sesji', swBtn(s.sound !== false, 'sound'))
+      + prefRow('Skala interfejsu', 'Powiększ lub pomniejsz całą aplikację', segBtns('scale', s.scale, [[90, '90%'], [100, '100%'], [110, '110%'], [120, '120%']])))
+      + sec(2, 'Animacje', prefRow('Animacje', 'Przejścia, wjazdy list, konfetti', segBtns('anim', s.anim, [['full', 'Pełne'], ['off', 'Wyłączone']]))
+      + prefRow('Animacja przy uruchomieniu', '<button class="link-btn" data-act="splash-preview">Pokaż podgląd</button>', swBtn(s.splash !== false, 'splash'))
+      + prefRow('Efekty po najechaniu', 'Podświetlenia i poświata pod kursorem', swBtn(s.hoverFx !== false, 'hoverFx')))
+      + sec(3, 'Strona Start', `<p class="pf-p">Pokaż tylko potrzebne kafelki.</p><div class="pf-checks">${cardOpts.map(([k, l]) => `<button class="pf-chk ${(s.hiddenCards || []).includes(k) ? '' : 'on'}" data-act="pref-card" data-v="${k}"><span>${l}</span><i>${I.checkSmall}</i></button>`).join('')}</div>`
+      + prefRow('Przestawianie kafelków', 'Pokazuje na Starcie przycisk „Ułóż kafelki”', swBtn(!!s.tileEdit, 'tileEdit'))
+      + (s.cardOrder?.length ? prefRow('Kolejność kafelków', 'Wróć do układu domyślnego', `<button class="btn sm" data-act="card-reset">Przywróć</button>`) : ''))
+      + sec(4, 'Dodawanie głosem', prefRow('Status', (dictNS || SpeechRec) ? '<span class="ok-txt">Rozpoznawanie mowy dostępne</span>' : 'Niedostępne w tym oknie', `<button class="btn sm" data-act="voice">${sz(I.mic, 14)} Wypróbuj</button>`)
+      + prefRow('Dodawaj od razu', 'Po zakończeniu mówienia bez potwierdzania', swBtn(!!s.voiceAuto, 'voiceAuto')))
+      + sec(5, 'Przywracanie', prefRow('Ustawienia domyślne', 'Wygląd i zachowanie jak na początku (zadania zostają)', `<button class="btn sm" data-act="pref-reset">Przywróć</button>`));
+  } else if (tab === 'theme') {
+    const cur = s.accent || 'todoist';
+    body = sec(0, 'Tryb', `<div class="seg-inline th-modes">${[['dark', 'Ciemny'], ['light', 'Jasny'], ['auto', 'Systemowy']].map(([v, l]) => `<button class="${s.theme === v ? 'sel' : ''}" data-act="pref" data-k="theme" data-v="${v}"><span class="th-mp ${v}"><i></i><i></i><i></i></span><span>${l}</span></button>`).join('')}</div>`)
+      + sec(1, 'Kolor motywu', `<div class="pf-sw th-grid">${ACCENTS.map(a => `<button class="${cur === a.id ? 'on' : ''}" data-act="pref" data-k="accent" data-v="${a.id}" style="--c:${a.color}"><span class="th-prev"><i class="sb"></i><i class="l1"></i><i class="l2"></i><i class="l3"></i><i class="dot"></i></span><span class="th-n">${a.name}</span></button>`).join('')}</div>`)
+      + sec(2, 'Wygląd menu', prefRow('Kolorowe ikony zakładek', 'Każda zakładka ma własny kolor', swBtn(s.navColors !== false, 'navColors')));
+  } else if (tab === 'sidebar') {
+    const ord = navOrder(), hid = s.hiddenNav || [];
+    body = sec(0, 'Zakładki w menu', `<p class="pf-p">Zmieniaj kolejność strzałkami lub przeciągając uchwyt. Przełącznik ukrywa zakładkę – ukryte nadal otworzysz z palety (Ctrl+K).</p>
+      <div class="nv-list">${ord.map((k, i) => `<div class="nv-row ${hid.includes(k) ? 'off' : ''} ${ui.navMoved === k ? 'moved' : ''}" draggable="true" data-nv="${k}" style="--nc:${NAV_HUE[k] || 'var(--accent)'}">
+        <span class="nv-grip" title="Przeciągnij">${I.grip}</span><span class="nv-ic">${NAV_DEF[k].icon()}</span><span class="grow">${NAV_DEF[k].label}</span>
+        <button class="icon-btn" data-act="nav-mv" data-k="${k}" data-d="-1" ${i === 0 ? 'disabled' : ''} title="Wyżej">${I.up}</button><button class="icon-btn" data-act="nav-mv" data-k="${k}" data-d="1" ${i === ord.length - 1 ? 'disabled' : ''} title="Niżej">${I.down}</button>
+        <button class="switch ${hid.includes(k) ? '' : 'on'}" data-act="nav-vis" data-k="${k}" role="switch" aria-checked="${!hid.includes(k)}" aria-label="Pokaż ${NAV_DEF[k].label}"><i></i></button></div>`).join('')}</div>
+      <div class="pf-actions"><button class="btn sm" data-act="nav-reset">Przywróć domyślną kolejność</button></div>`)
+      + sec(1, 'Wygląd', prefRow('Liczniki zadań', 'Liczby przy zakładkach i projektach', swBtn(s.navCounts !== false, 'navCounts'))
+      + prefRow('Kolorowe ikony', 'Każda zakładka w swoim kolorze', swBtn(s.navColors !== false, 'navColors')));
+    ui.navMoved = null;
+  } else if (tab === 'productivity') {
+    const k = K(), L = karmaLevel(k.points);
+    body = sec(0, 'Cele', prefRow('Dzienny cel', 'Ile zadań chcesz kończyć dziennie', stepper('dailyGoal', s.dailyGoal || 5, 1))
+      + prefRow('Konfetti', 'Po osiągnięciu dziennego celu', swBtn(s.confetti !== false, 'confetti'))
+      + prefRow('Auto-priorytety', state.autoPrio.enabled ? 'Włączone' : 'Wyłączone', `<button class="btn sm" data-act="nav" data-view="autoprio">Otwórz</button>`))
+      + sec(1, 'Skupienie (Pomodoro)', prefRow('Sesja pracy', '', stepper('pomo', s.pomo[0], 5, 'data-i="0"', ' min')) + prefRow('Krótka przerwa', '', stepper('pomo', s.pomo[1], 1, 'data-i="1"', ' min')) + prefRow('Długa przerwa', 'Co 4 sesje', stepper('pomo', s.pomo[2], 5, 'data-i="2"', ' min')))
+      + sec(2, 'Matryca', prefRow('Zadanie jest „pilne”, gdy termin wypada…', '', segBtns('mxDays', s.mxDays ?? 2, [[0, 'dziś'], [1, '1 d'], [2, '2 d'], [3, '3 d'], [7, '7 d']])))
+      + sec(3, `${sz(I.star, 16)} Karma`, prefRow('Śledzenie karmy', 'Punkty za systematyczność – domyślnie wyłączone', swBtn(!!s.karma, 'karma'))
+      + (s.karma ? `<div class="k-panel">${karmaCardBody()}<div class="k-ladder">${KARMA_LV.map(([p, n, e], i) => `<span class="${i === L.i ? 'cur' : i < L.i ? 'got' : ''}" title="${p} pkt">${e} ${n}<small>${p}</small></span>`).join('')}</div>
+        <div class="pf-actions"><button class="btn sm" data-act="karma-reset">Wyzeruj karmę</button></div></div>` : '')
+      + `<details class="k-rules" ${s.karma ? '' : 'open'}><summary>Jak działa karma?</summary>
+        <p>Karma to licznik Twojej systematyczności. Rośnie, gdy robisz rzeczy na czas, i spada, gdy zadania zalegają. Kolejne poziomy wymagają coraz więcej punktów, a na wyższych poziomach nagrody są nieco mniejsze, a kary nieco większe.</p>
+        <table class="kbd-table"><tr><td><b class="pos">+4</b> + priorytet (do +3)</td><td>ukończenie zadania (P1 daje +3, P2 +2, P3 +1)</td></tr>
+        <tr><td><b class="pos">+3</b></td><td>zadanie ukończone w terminie lub przed nim</td></tr><tr><td><b class="neg">−2</b></td><td>zadanie ukończone po terminie (wciąż na plus)</td></tr>
+        <tr><td><b class="pos">+10</b></td><td>osiągnięty dzienny cel (liczone następnego dnia)</td></tr><tr><td><b class="pos">+2 × dni</b> (do +20)</td><td>seria dni z osiągniętym celem</td></tr>
+        <tr><td><b class="pos">+1</b> za zadanie (do +10)</td><td>planowanie – zadania dodane danego dnia</td></tr>
+        <tr><td><b class="neg">−2</b> za zadanie (do −30)</td><td>każde zadanie po terminie, liczone raz dziennie</td></tr><tr><td><b class="neg">−3</b></td><td>dzień bez żadnego ukończonego zadania</td></tr>
+        <tr><td>cofnięcie</td><td>odznaczenie ukończonego zadania odbiera przyznane za nie punkty</td></tr></table>
+        <p class="muted small">Poziomy: ${KARMA_LV.map(([p, n]) => `${n} (${p})`).join(' → ')}. Na każdym kolejnym poziomie punkty za zadania są mniejsze o 5% (najwyżej o 40%), a kary większe o 10%.</p></details>`);
+  } else if (tab === 'calendars') {
+    const c = gcalCache(), on = !!s.gcalOn, cid = gcalCid();
+    gcalPreload();
+    body = sec(0, `${I.google} Kalendarz Google`, on
+      ? prefRow('Połączono', c.at ? `Ostatnia synchronizacja: ${fmtDateTime(c.at)} · ${(c.events || []).length} wydarzeń` : 'Kliknij „Odśwież”, aby pobrać wydarzenia', `<div style="display:flex;gap:6px"><button class="btn sm primary" data-act="gcal-sync">Odśwież</button><button class="btn sm" data-act="gcal-off">Odłącz</button></div>`)
+        + (c.cals?.length ? `<div class="gc-cals">${c.cals.map(k => `<span style="--c:${k.color || 'var(--qi-b)'}"><i></i>${esc(k.name)}</span>`).join('')}</div>` : '')
+      : prefRow('Wydarzenia z Google w Listo', cid ? 'Zobaczysz swoje spotkania w Kalendarzu, Nadchodzących i na Starcie' : 'Wymaga jednorazowej konfiguracji (instrukcja poniżej)', `<button class="btn sm primary" data-act="gcal-sync">${I.google} Połącz</button>`))
+      + sec(1, 'Gdzie pokazywać wydarzenia', prefRow('W Kalendarzu', '', swBtn(s.gcalCal !== false, 'gcalCal')) + prefRow('W Nadchodzących', '', swBtn(s.gcalUp !== false, 'gcalUp')) + prefRow('Na Starcie i w Dziś', '', swBtn(s.gcalToday !== false, 'gcalToday'))
+        + prefRow('Numery tygodni', 'W widoku miesiąca', swBtn(!!s.calWeekNums, 'calWeekNums')))
+      + sec(2, 'Konfiguracja (jednorazowo)', `${prefRow('Identyfikator klienta Google', 'OAuth Client ID – zaczyna się od cyfr, kończy na .apps.googleusercontent.com', `<input class="pf-in wide" data-k="gcalClientId" value="${esc(s.gcalClientId || '')}" placeholder="123…apps.googleusercontent.com" spellcheck="false" aria-label="Client ID">`)}
+        <ol class="gc-steps"><li>Wejdź na <b>console.cloud.google.com</b> → utwórz projekt „Listo”.</li><li><b>APIs &amp; Services → Library</b> → włącz <b>Google Calendar API</b>.</li>
+        <li><b>OAuth consent screen</b> → typ <i>External</i>, nazwa „Listo”, Twój e-mail; w <i>Test users</i> dodaj adresy osób, które będą łączyć kalendarz.</li>
+        <li><b>Credentials → Create credentials → OAuth client ID</b> → typ <i>Web application</i>; w <i>Authorized JavaScript origins</i> dodaj adres swojej strony (np. <code>https://dasiek07.github.io</code>).</li>
+        <li>Skopiuj <b>Client ID</b> i wklej go powyżej, potem kliknij „Połącz”.</li></ol>
+        <p class="muted small">Listo prosi tylko o dostęp do kalendarza. Wydarzenia są zapisywane wyłącznie na tym urządzeniu; zadanie możesz wysłać do Google przyciskiem w oknie zadania. Połączenie działa na stronie i w aplikacji na telefonie; w aplikacji Windows okno logowania Google może się nie otworzyć – wtedy połącz kalendarz na stronie.</p>`);
+  } else {
+    body = sec(0, 'Konto i synchronizacja', accountRows())
+      + sec(1, 'Urządzenia', (installEvt ? prefRow('Zainstaluj aplikację', 'Własne okno i ikona – bez paska przeglądarki', `<button class="btn sm primary" data-act="pwa-install">Zainstaluj</button>`) : '')
+        + prefRow('Telefon', 'Otwórz stronę Listo i wybierz „Zainstaluj aplikację” (Android) lub „Do ekranu początkowego” (iPhone)', '')
+        + prefRow('Przenieś zadania', 'Kopiuj z jednego miejsca, wklej w drugim', `<div style="display:flex;gap:6px"><button class="btn sm" data-act="acc-export">Kopiuj</button><button class="btn sm" data-act="acc-import">Wklej</button></div>`));
+  }
+  html += `<div class="pf2"><nav class="pf2-tabs" role="tablist">${PREF_TABS.map(([k, l, ic]) => `<button role="tab" class="${tab === k ? 'sel' : ''}" data-act="pref-tab" data-t="${k}">${sz(ic(), 17)}<span>${l}</span></button>`).join('')}</nav>
+    <div class="pf2-body" data-tab="${tab}">${body}</div></div>`;
+  return html;
+}
+// przeciąganie zakładek w Ustawieniach → Pasek boczny
+let nvDrag = null;
+document.addEventListener('dragstart', e => { const r = e.target.closest?.('.nv-row'); if (!r) return; nvDrag = r.dataset.nv; e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', nvDrag); requestAnimationFrame(() => r.classList.add('dragging')); });
+document.addEventListener('dragover', e => { if (!nvDrag) return; const r = e.target.closest('.nv-row'); $$('.nv-row.drop-to').forEach(x => x !== r && x.classList.remove('drop-to')); if (r && r.dataset.nv !== nvDrag) { e.preventDefault(); r.classList.add('drop-to'); } });
+document.addEventListener('drop', e => { if (!nvDrag) return; const r = e.target.closest('.nv-row'), k = nvDrag; nvDrag = null; if (!r || r.dataset.nv === k) return; e.preventDefault(); const o = navOrder().filter(x => x !== k); o.splice(o.indexOf(r.dataset.nv), 0, k); state.settings.navOrder = o; ui.navMoved = k; ui.quiet = true; commit(); });
+document.addEventListener('dragend', () => { nvDrag = null; $$('.nv-row.drop-to, .nv-row.dragging').forEach(x => x.classList.remove('drop-to', 'dragging')); });
+
+// ---------- dolny pasek na telefonie ----------
+function renderTabbar() {
+  let tb = $('#tabbar');
+  if (!tb) { tb = document.createElement('nav'); tb.id = 'tabbar'; tb.setAttribute('aria-label', 'Nawigacja'); document.body.appendChild(tb); }
+  const td = todayStr(), n = active().filter(t => t.due && t.due <= td).length, v = ui.view.type;
+  const items = [['home', I.home, 'Start'], ['today', todayIcon(), 'Dziś'], ['upcoming', I.upcoming, 'Plan'], ['search', I.search, 'Szukaj']];
+  tb.innerHTML = items.map(([k, ic, l]) => `<button class="${v === k && !ui.sidebar ? 'on' : ''}" data-act="nav" data-view="${k}" aria-label="${l}"><span class="tb-ic">${ic}${k === 'today' && n ? `<b>${n > 99 ? '99+' : n}</b>` : ''}</span><span class="tb-l">${l}</span></button>`).join('')
+    + `<button class="${ui.sidebar && isNarrow() ? 'on' : ''}" data-act="tb-more" aria-label="Menu"><span class="tb-ic">${I.menu}</span><span class="tb-l">Menu</span></button>`;
+}
+// gest: przesuń od lewej krawędzi, by otworzyć menu; w lewo, by zamknąć
+(() => {
+  let sx = 0, sy = 0, mode = null;
+  document.addEventListener('touchstart', e => {
+    if (!isNarrow() || e.touches.length !== 1) return;
+    const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+    mode = !ui.sidebar && sx < 22 ? 'open' : ui.sidebar && e.target.closest('#sidebar, .sb-backdrop') ? 'close' : null;
+  }, { passive: true });
+  document.addEventListener('touchend', e => {
+    if (!mode) return;
+    const t = e.changedTouches[0], dx = t.clientX - sx, dy = Math.abs(t.clientY - sy);
+    if (mode === 'open' && dx > 60 && dy < 60) { ui.sidebar = true; render(); }
+    if (mode === 'close' && dx < -60 && dy < 60) { ui.sidebar = false; render(); }
+    mode = null;
+  }, { passive: true });
+})();
+// delikatna wibracja przy odhaczaniu na telefonie
+document.addEventListener('click', e => { if (e.target.closest('.check[data-act="toggle"], .hb-today, .hb-d, .hm-hb-i') && navigator.vibrate && matchMedia('(pointer: coarse)').matches) navigator.vibrate(12); }, true);
+
+// ---------- wejście aplikacji po animacji startowej ----------
+function launchIntroPrep() {
+  const h1 = $('.hm-greet h1');
+  if (h1 && !h1.dataset.split) {
+    h1.dataset.split = '1';
+    let n = 0;
+    const walk = node => [...node.childNodes].forEach(c => {
+      if (c.nodeType === 3) {
+        const frag = document.createDocumentFragment();
+        c.textContent.split(/(\s+)/).forEach(w => {
+          if (!w) return;
+          if (/^\s+$/.test(w)) { frag.appendChild(document.createTextNode(w)); return; }
+          const ws = document.createElement('span'); ws.className = 'lw';
+          [...w].forEach(ch => { const s = document.createElement('span'); s.className = 'lc'; s.textContent = ch; s.style.setProperty('--c', n++); ws.appendChild(s); });
+          frag.appendChild(ws);
+        });
+        c.replaceWith(frag);
+      } else walk(c);
+    });
+    walk(h1);
+  }
+  const cx = innerWidth / 2, by = innerHeight;
+  $$('.hm-card').forEach((c, i) => {
+    const r = c.getBoundingClientRect();
+    c.style.setProperty('--dx', Math.round(cx - (r.left + r.width / 2)) + 'px');
+    c.style.setProperty('--dy', Math.round(by - r.top) + 'px');
+    c.style.setProperty('--rot', ((i % 2 ? 1 : -1) * (5 + (i % 4) * 3)) + 'deg');
+  });
+  $$('#sidebar > *, #sidebar .nav-item').forEach((el, i) => el.style.setProperty('--n', Math.min(i, 22)));
+  $$('#tabbar button').forEach((el, i) => el.style.setProperty('--n', i));
+}
+
+// ---------- po każdym rysowaniu ----------
+const baseRender = render;
+render = function () {
+  const app = $('#app');
+  // rysowanie w trakcie wejścia po starcie nie może odtworzyć animacji od nowa
+  if (app.classList.contains('launch') && !app.classList.contains('launch-wait')) app.classList.remove('launch');
+  karmaDaily();
+  baseRender();
+  renderTabbar();
+  document.documentElement.classList.toggle('no-nav-counts', state.settings.navCounts === false);
+  const v = ui.view.type, content = $('.content');
+  if (v === 'upcoming' && content) {
+    let last = 0, tm = 0;
+    content.addEventListener('scroll', () => {
+      const now = Date.now();
+      if (now - last > 50) { last = now; upTrack(); }
+      clearTimeout(tm); tm = setTimeout(upTrack, 80);
+    }, { passive: true });
+    upTrack();
+  }
+  if (ui.movedCard) { const c = $(`.hm-card[data-card="${ui.movedCard}"]`); c?.classList.add('moved'); c?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); ui.movedCard = null; }
+  // odznaka poziomu karmy przy imieniu
+  const u = $('#sidebar .user');
+  if (u && state.settings.karma) { const L = karmaLevel(K().points); u.insertAdjacentHTML('beforeend', `<span class="k-badge" title="Karma: ${L.name} · ${K().points} pkt">${L.emo}</span>`); }
+  // „Dodaj do Kalendarza Google” w oknie zadania
+  const side = $('#modal-root .tm-side'), mt = ui.modal?.id && task(ui.modal.id);
+  if (side && mt && state.settings.gcalOn && !mt.completed && !$('.gc-add', side)) side.insertAdjacentHTML('beforeend', `<div class="side-field gc-add"><label>Kalendarz Google</label><button class="side-btn" data-act="gcal-add" data-id="${mt.id}">${I.google} ${mt.gcalId ? 'Dodano – dodaj ponownie' : 'Dodaj do kalendarza'}</button></div>`);
+};
+
+// ---------- kliknięcia ----------
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]');
+  if (!el || el.closest('#popover') || el.closest('#dialog-root')) return;
+  const a = el.dataset.act;
+  switch (a) {
+    case 'sb-exp': e.stopPropagation(); sbExpanded(el.dataset.id, !sbExpanded(el.dataset.id)); renderSidebar(); break;
+    case 'sb-sec': {
+      const pid = el.dataset.pid, sid = el.dataset.sid;
+      ui.modal = null;
+      if (!(ui.view.type === 'project' && ui.view.id === pid)) setView({ type: 'project', id: pid });
+      setTimeout(() => { const s = $(`.section[data-sid="${sid}"]`); if (s) { s.scrollIntoView({ block: 'start', behavior: 'smooth' }); s.classList.remove('flash-sec'); void s.offsetWidth; s.classList.add('flash-sec'); } }, 120);
+      break;
+    }
+    case 'home-edit': ui.homeEdit = !ui.homeEdit; ui.quiet = true; render(); if (!ui.homeEdit) toast('Zapisano układ kafelków'); break;
+    case 'card-mv': e.stopPropagation(); moveCard(el.dataset.k, null, +el.dataset.d); break;
+    case 'card-reset': state.settings.cardOrder = []; ui.quiet = true; commit(); toast('Przywrócono domyślny układ kafelków'); break;
+    case 'pref-tab': ui.prefTab = el.dataset.t; ui.stagger = true; render(); $('.content') && ($('.content').scrollTop = 0); break;
+    case 'pref-open': ui.prefTab = el.dataset.t; setView({ type: 'prefs' }); break;
+    case 'nav-mv': { const k = el.dataset.k, o = navOrder(), i = o.indexOf(k), j = i + +el.dataset.d; if (j < 0 || j >= o.length) break; o.splice(i, 1); o.splice(j, 0, k); state.settings.navOrder = o; ui.navMoved = k; ui.quiet = true; commit(); break; }
+    case 'nav-vis': { const k = el.dataset.k, h = new Set(state.settings.hiddenNav || []); h.has(k) ? h.delete(k) : h.add(k); state.settings.hiddenNav = [...h]; el.classList.toggle('on', !h.has(k)); el.closest('.nv-row')?.classList.toggle('off', h.has(k)); save(); renderSidebar(); break; }
+    case 'nav-reset': state.settings.navOrder = []; state.settings.hiddenNav = []; ui.quiet = true; commit(); toast('Przywrócono domyślne menu'); break;
+    case 'karma-reset': confirmDlg('Wyzerować karmę?', 'Punkty i historia karmy zostaną usunięte. Zadania pozostają bez zmian.', 'Wyzeruj', () => { state.karma = { points: 0, log: [], day: todayStr() }; ui.quiet = true; commit(); }); break;
+    case 'gcal-sync': gcalSync(); break;
+    case 'gcal-off': gcalDisconnect(); break;
+    case 'gcal-add': gcalAddTask(task(el.dataset.id)); break;
+    case 'cal-mode': ui.calMode = el.dataset.v; if (ui.calMode === 'week') ui.calWeek = weekStart(ui.calSel || todayStr()); ui.stagger = true; render(); break;
+    case 'calw-nav': { const n = +el.dataset.n; ui.calWeek = n ? addDays(ui.calWeek || weekStart(todayStr()), 7 * n) : weekStart(todayStr()); if (!n) ui.calSel = todayStr(); ui.stagger = true; render(); break; }
+    case 'tb-more': ui.sidebar = !ui.sidebar; render(); break;
+  }
+});
+if (state.settings.gcalOn) setTimeout(gcalPreload, 4000);
 render();
 save();
 initSync();
