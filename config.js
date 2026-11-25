@@ -4,5 +4,5 @@
 window.LISTO_CONFIG = {
   supabaseUrl: 'https://rymgdbonnfrzlsyfdsgb.supabase.co',
   supabaseKey: 'sb_publishable_qhCnlZ-73yDz5fT8tFaHwQ_cef_Gg_h',
-  siteUrl: '',       // adres strony z GitHub Pages, np. 'https://twoj-login.github.io/listo/'
+  siteUrl: 'https://dasiek07.github.io/listo/',
 };
