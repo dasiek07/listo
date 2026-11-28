@@ -22,6 +22,7 @@ const PREF_DEFAULTS = {
   startView: 'home', density: 'normal', scale: 100, anim: 'full', splash: true, confetti: true, navColors: true, showDesc: true,
   pomo: [25, 5, 15], hiddenNav: [], hiddenCards: [], voiceAuto: false, hoverFx: true,
   navOrder: [], cardOrder: [], tileEdit: false, karma: false, navCounts: true, gcalCal: true, gcalUp: true, gcalToday: true, gcalClientId: '', calWeekNums: false,
+  remTimed: 30, remAllDay: '', remMorning: '08:00', remPopup: true,
 };
 const PREF_FALSE = ['voiceAuto', 'karma', 'tileEdit', 'calWeekNums'];   // przełączniki domyślnie wyłączone
 const PREF_REDRAW = ['karma', 'tileEdit', 'gcalCal', 'gcalUp', 'gcalToday', 'calWeekNums'];
@@ -651,6 +652,7 @@ function taskRow(t, o = {}) {
   if (subs.length) meta.push(`<span class="meta-item">${I.subtask} ${subsDone}/${subs.length}</span>`);
   if (di && !(o.hideToday && di.cls === 'today' && !t.time && !t.recurring)) meta.push(`<span class="meta-item due ${t.completed && !o.asActive ? '' : di.cls}"${t.completed ? '' : ` data-act="task-date" data-id="${t.id}" title="Zmień termin"`}>${I.cal} ${di.label}${t.recurring ? ' ' + I.repeat : ''}</span>`);
   if (t.comments.length) meta.push(`<span class="meta-item">${I.comment} ${t.comments.length}</span>`);
+  if (Array.isArray(t.reminders) && t.reminders.length && !t.completed) meta.push(`<span class="meta-item rem-meta" title="Przypomnienia: ${t.reminders.length}">${sz(I.bell, 13)}${t.reminders.length > 1 ? ' ' + t.reminders.length : ''}</span>`);
   const fzSec = ui.fzTotals?.[t.id];
   if (fzSec) meta.push(`<span class="meta-item fz-meta" data-act="focus-report" data-id="${t.id}" title="Czas skupienia – kliknij, by zobaczyć szczegóły">${sz(I.timer, 13)} ${fmtDur(fzSec)}</span>`);
   if (t.autoSet != null && !t.completed) meta.push(`<span class="meta-item ap-meta" data-act="nav" data-view="autoprio" title="Priorytet podniesiony automatycznie: ${esc(t.autoWhy || '')} (Twój: P${t.prio0})">${sz(I.bolt, 12)} auto</span>`);
@@ -4573,7 +4575,7 @@ function renderCalendar() {
 function isoWeek(s) { const d = parseDate(s); d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7); const w1 = new Date(d.getFullYear(), 0, 4); return 1 + Math.round(((d - w1) / 864e5 - 3 + (w1.getDay() + 6) % 7) / 7); }
 
 // ---------- Ustawienia z zakładkami ----------
-const PREF_TABS = [['general', 'Ogólne', () => I.gear], ['theme', 'Motyw', () => I.moon], ['sidebar', 'Pasek boczny', () => I.sidebar], ['productivity', 'Produktywność', () => I.pulse], ['calendars', 'Kalendarze', () => I.calMonth], ['account', 'Konto', () => I.cloud]];
+const PREF_TABS = [['general', 'Ogólne', () => I.gear], ['theme', 'Motyw', () => I.moon], ['sidebar', 'Pasek boczny', () => I.sidebar], ['productivity', 'Produktywność', () => I.pulse], ['calendars', 'Kalendarze', () => I.calMonth], ['notify', 'Powiadomienia', () => I.bell], ['account', 'Konto', () => I.cloud]];
 function renderPrefs() {
   const s = state.settings, tab = ui.prefTab || 'general';
   let html = header('Ustawienia', { icon: sz(I.gear, 24), iconCls: 'tile', sub: 'Domyślne wartości to obecny wygląd aplikacji – w każdej chwili możesz do nich wrócić.' });
@@ -4646,6 +4648,8 @@ function renderPrefs() {
         <li><b>Credentials → Create credentials → OAuth client ID</b> → typ <i>Web application</i>; w <i>Authorized JavaScript origins</i> dodaj adres swojej strony (np. <code>https://dasiek07.github.io</code>).</li>
         <li>Skopiuj <b>Client ID</b> i wklej go powyżej, potem kliknij „Połącz”.</li></ol>
         <p class="muted small">Listo prosi tylko o dostęp do kalendarza. Wydarzenia są zapisywane wyłącznie na tym urządzeniu; zadanie możesz wysłać do Google przyciskiem w oknie zadania. Połączenie działa na stronie i w aplikacji na telefonie; w aplikacji Windows okno logowania Google może się nie otworzyć – wtedy połącz kalendarz na stronie.</p>`);
+  } else if (tab === 'notify') {
+    body = notifyPrefsBody(sec);
   } else {
     body = sec(0, 'Konto i synchronizacja', accountRows())
       + sec(1, 'Urządzenia', (installEvt ? prefRow('Zainstaluj aplikację', 'Własne okno i ikona – bez paska przeglądarki', `<button class="btn sm primary" data-act="pwa-install">Zainstaluj</button>`) : '')
@@ -4784,6 +4788,285 @@ document.addEventListener('click', e => {
   }
 });
 if (state.settings.gcalOn) setTimeout(gcalPreload, 4000);
+// ================================================================
+//  Przypomnienia i powiadomienia
+//  • zadanie: t.reminders = [{min}|{clock:'HH:MM'}|{abs:ms}]; brak pola → ustawienia domyślne
+//  • w aplikacji: okienko + powiadomienie systemowe; przy zamkniętej aplikacji: Web Push z serwera
+// ================================================================
+const REM_OPTS = [[{ min: 0 }, 'W momencie terminu'], [{ min: 5 }, '5 min przed'], [{ min: 15 }, '15 min przed'], [{ min: 30 }, '30 min przed'], [{ min: 60 }, '1 godz. przed'], [{ min: 120 }, '2 godz. przed'], [{ min: 1440 }, '1 dzień przed'], [{ clock: '08:00' }, 'Rano w dniu terminu (8:00)']];
+function remList(t) {
+  if (Array.isArray(t.reminders)) return t.reminders;
+  const s = state.settings, r = [];
+  if (t.time) { if (+s.remTimed >= 0 && s.remTimed !== '' && s.remTimed != null) r.push({ min: +s.remTimed, def: 1 }); }
+  else if (s.remAllDay) r.push({ clock: s.remAllDay, def: 1 });
+  return r;
+}
+function remAt(t, r) {
+  if (r.abs) return r.abs;
+  const d = parseDate(t.due);
+  if (r.clock) { const [h, m] = r.clock.split(':').map(Number); d.setHours(h, m, 0, 0); return d.getTime(); }
+  const [h, m] = (t.time || '09:00').split(':').map(Number); d.setHours(h, m, 0, 0);
+  return d.getTime() - (r.min || 0) * 6e4;
+}
+function remText(r) {
+  if (r.abs) { const d = new Date(r.abs); return `${pad(d.getHours())}:${pad(d.getMinutes())}, ${d.getDate()} ${PL_MON_SHORT[d.getMonth()]}`; }
+  if (r.clock) return `O ${r.clock} w dniu terminu`;
+  const m = r.min || 0;
+  return m === 0 ? 'W momencie terminu' : m < 60 ? `${m} min przed` : m % 1440 === 0 ? `${m / 1440} ${m === 1440 ? 'dzień' : 'dni'} przed` : `${m / 60} godz. przed`;
+}
+const remKey = r => r.abs ? 'a' + r.abs : r.clock ? 'c' + r.clock.replace(':', '') : 'm' + (r.min || 0);
+function remBody(t) {
+  const di = dueInfo(t.due, t.time), p = proj(t.projectId);
+  return `${di ? (t.time ? 'Termin: ' : '') + di.label : ''}${p && !p.isInbox ? ' · ' + projName(p) : ''}${t.description ? '\n' + t.description.split('\n')[0].slice(0, 90) : ''}`;
+}
+// lista przypomnień w przedziale czasu (wspólna dla aplikacji i serwera)
+function remSchedule(from, to) {
+  const out = [], s = state.settings;
+  active().forEach(t => {
+    if (!t.due) return;
+    remList(t).forEach(r => {
+      const at = remAt(t, r);
+      if (at > from && at <= to) out.push({ id: `t${t.id}-${remKey(r)}-${t.due.replace(/-/g, '')}`, task: t.id, at, title: t.title, body: remBody(t), url: './#today' });
+    });
+  });
+  if (s.remMorning) {
+    const [h, m] = s.remMorning.split(':').map(Number);
+    for (let i = 0, d = todayStr(); i < 30; i++, d = addDays(d, 1)) {
+      const dt = parseDate(d); dt.setHours(h, m, 0, 0);
+      const at = dt.getTime();
+      if (at > to) break;
+      if (at <= from) continue;
+      const ts = active().filter(t => t.due && t.due <= d && (t.due === d || t.due < todayStr() || i === 0)).sort(byDue);
+      if (!ts.length) continue;
+      const od = ts.filter(t => t.due < d).length;
+      out.push({ id: `morning-${d.replace(/-/g, '')}`, task: null, at, title: `☀️ Plan na dziś: ${ts.length} ${plural(ts.length, 'zadanie', 'zadania', 'zadań')}${od ? ` (${od} po terminie)` : ''}`, body: ts.slice(0, 4).map(t => '• ' + t.title + (t.time ? ` – ${t.time}` : '')).join('\n') + (ts.length > 4 ? `\n+ ${ts.length - 4} więcej` : ''), url: './#today' });
+    }
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// ---------- w aplikacji: sprawdzanie co 15 s ----------
+const REM = { last: 0, shown: new Set(), hash: '' };
+try { REM.last = +localStorage.getItem('listo-rem-last') || Date.now(); } catch (e) { REM.last = Date.now(); }
+function remTick() {
+  const now = Date.now();
+  let from = REM.last;
+  if (now - from > 15 * 6e4) from = now - 15 * 6e4; // po dłuższej przerwie nie zasypujemy starymi
+  const due = remSchedule(from, now);
+  REM.last = now;
+  try { localStorage.setItem('listo-rem-last', String(now)); } catch (e) { /* */ }
+  due.forEach(remFire);
+}
+setInterval(remTick, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) remTick(); });
+function remFire(r) {
+  if (REM.shown.has(r.id)) return;
+  REM.shown.add(r.id);
+  remNotify(r);
+  if (document.visibilityState === 'visible' && state.settings.remPopup !== false) remPopup(r);
+}
+async function remNotify(r) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const opts = { body: r.body, tag: r.id, icon: 'icon-192.png', badge: 'icon-192.png', data: { url: r.url, task: r.task }, renotify: false };
+  try {
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    if (reg) { await reg.showNotification(r.title, Object.assign({ actions: r.task ? [{ action: 'done', title: 'Zrobione' }, { action: 'snooze', title: 'Za 10 min' }] : [] }, opts)); return; }
+  } catch (e) { /* */ }
+  try { const n = new Notification(r.title, opts); n.onclick = () => { focus(); if (r.task) openTask(r.task); n.close(); }; } catch (e) { /* */ }
+}
+// okienko przypomnienia w rogu ekranu
+function remPopup(r) {
+  let box = $('#rem-stack');
+  if (!box) { box = document.createElement('div'); box.id = 'rem-stack'; document.body.appendChild(box); }
+  const el = document.createElement('div');
+  el.className = 'rem-pop';
+  el.innerHTML = `<span class="rem-ic">${sz(I.bell, 20)}</span><div class="grow"><b>${esc(r.title)}</b><span>${esc(r.body).replace(/\n/g, '<br>')}</span>
+    ${r.task ? `<div class="rem-btns"><button class="btn sm primary" data-r="done">${sz(I.check, 13)} Zrobione</button><button class="btn sm" data-r="snooze">Za 10 min</button><button class="btn sm ghost" data-r="open">Otwórz</button></div>` : `<div class="rem-btns"><button class="btn sm" data-r="today">Pokaż Dziś</button></div>`}</div>
+    <button class="icon-btn rem-x" data-r="x" aria-label="Zamknij">${I.x}</button><i class="rem-bar"></i>`;
+  box.appendChild(el);
+  playSound('restore');
+  if (navigator.vibrate && matchMedia('(pointer: coarse)').matches) navigator.vibrate([20, 60, 20]);
+  let tm = setTimeout(close, 15000);
+  function close() { clearTimeout(tm); el.classList.add('out'); setTimeout(() => el.remove(), 260); }
+  el.addEventListener('mouseenter', () => { clearTimeout(tm); el.classList.add('hold'); });
+  el.addEventListener('mouseleave', () => { tm = setTimeout(close, 6000); el.classList.remove('hold'); });
+  el.addEventListener('click', e => {
+    const a = e.target.closest('[data-r]')?.dataset.r;
+    if (!a) return;
+    if (a === 'done' && task(r.task) && !task(r.task).completed) toggleTask(r.task);
+    if (a === 'snooze') remSnooze(r.task, 10);
+    if (a === 'open' && task(r.task)) openTask(r.task);
+    if (a === 'today') setView({ type: 'today' });
+    close();
+  });
+}
+function remSnooze(id, min) {
+  const t = task(id);
+  if (!t) return;
+  const base = remList(t).filter(r => !(r.abs && r.abs < Date.now())).map(r => { const c = Object.assign({}, r); delete c.def; return c; });
+  t.reminders = [...base, { abs: Date.now() + min * 6e4 }];
+  commit();
+  toast(`⏰ Przypomnę za ${min} min`);
+}
+// kliknięcie powiadomienia (z service workera) lub link ?task=…&act=…
+function remAction(id, act) {
+  if (!id || !task(id)) return;
+  if (act === 'done') { if (!task(id).completed) toggleTask(id); }
+  else if (act === 'snooze') remSnooze(id, 10);
+  else openTask(id);
+}
+navigator.serviceWorker?.addEventListener('message', e => { if (e.data?.type === 'listo-notif') remAction(e.data.task, e.data.act); });
+(() => {
+  const q = new URLSearchParams(location.search), id = q.get('task');
+  if (!id) return;
+  setTimeout(() => remAction(id, q.get('act')), 900);
+  try { history.replaceState(null, '', location.pathname + location.hash); } catch (e) { /* */ }
+})();
+
+// ---------- wybór przypomnień w oknie zadania ----------
+function remPicker(anchor, t) {
+  openPopover(anchor, (pop, close) => {
+    const draw = () => {
+      const cur = remList(t), explicit = Array.isArray(t.reminders);
+      pop.innerHTML = `<div class="menu rem-menu"><div class="menu-label">Przypomnienia${!t.due ? ' – najpierw ustaw termin' : ''}</div>
+        ${cur.map((r, i) => `<div class="rem-cur"><span>${sz(I.bell, 14)} ${remText(r)}${r.def ? ' <em>domyślne</em>' : ''}</span><button class="icon-btn" data-rm="${i}" title="Usuń">${I.x}</button></div>`).join('') || '<div class="menu-empty">Brak przypomnień</div>'}
+        <div class="menu-sep"></div>
+        ${REM_OPTS.map(([r, l], i) => `<button class="menu-item" data-add="${i}" ${t.due ? '' : 'disabled'}>${sz(I.plus, 14)}<span class="grow">${l}</span></button>`).join('')}
+        <div class="rem-custom"><input type="time" class="rem-time" aria-label="Własna godzina"><button class="btn sm" data-addclock ${t.due ? '' : 'disabled'}>Dodaj godzinę</button></div>
+        ${explicit ? '<div class="menu-sep"></div><button class="menu-item" data-reset>Przywróć domyślne</button>' : ''}
+        <button class="menu-item" data-none>Bez przypomnień dla tego zadania</button></div>`;
+    };
+    const setR = arr => { t.reminders = arr.map(r => { const c = Object.assign({}, r); delete c.def; return c; }); save(); render(); draw(); };
+    pop.onclick = e => {
+      const b = e.target.closest('[data-rm],[data-add],[data-addclock],[data-reset],[data-none]');
+      if (!b) return;
+      const cur = remList(t);
+      if (b.dataset.rm !== undefined) setR(cur.filter((_, i) => i !== +b.dataset.rm));
+      else if (b.dataset.add !== undefined) { const r = REM_OPTS[+b.dataset.add][0]; if (!cur.some(x => remKey(x) === remKey(r))) setR([...cur, r]); }
+      else if (b.hasAttribute('data-addclock')) { const v = $('.rem-time', pop).value; if (v) setR([...cur, { clock: v }]); }
+      else if (b.hasAttribute('data-reset')) { delete t.reminders; save(); render(); draw(); }
+      else if (b.hasAttribute('data-none')) { setR([]); close(); toast('To zadanie nie będzie przypominać'); }
+    };
+    draw();
+  });
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-act="rem-pick"]');
+  if (!b || b.closest('#popover')) return;
+  e.stopPropagation();
+  const t = task(b.dataset.id);
+  if (t) remPicker(b, t);
+});
+
+// ---------- powiadomienia push z serwera (gdy aplikacja jest zamknięta) ----------
+const PUSH = { ok: null, pub: '', url: CFG.supabaseUrl ? CFG.supabaseUrl.replace(/\/$/, '') + '/functions/v1/listo-push' : '' };
+async function pushInfo(force) {
+  if (PUSH.ok !== null && !force) return PUSH.ok;
+  if (!PUSH.url) return (PUSH.ok = false);
+  try { const r = await fetch(PUSH.url + '?vapid=1'); const j = await r.json(); PUSH.pub = j.publicKey || ''; PUSH.ok = !!PUSH.pub; }
+  catch (e) { PUSH.ok = false; }
+  return PUSH.ok;
+}
+const b64u = s => { const p = '='.repeat((4 - s.length % 4) % 4), b = atob((s + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(b, c => c.charCodeAt(0)); };
+const pushCapable = () => 'serviceWorker' in navigator && 'PushManager' in window && location.protocol === 'https:';
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+async function notifyEnable() {
+  if (!('Notification' in window)) { toast(isIOS() && !isStandalone() ? 'Na iPhonie najpierw dodaj Listo do ekranu początkowego i otwórz je z ikony' : 'To okno nie obsługuje powiadomień'); return; }
+  let perm = Notification.permission;
+  if (perm !== 'granted') perm = await Notification.requestPermission();
+  if (perm !== 'granted') { toast(perm === 'denied' ? 'Powiadomienia są zablokowane – zezwól na nie w ustawieniach przeglądarki' : 'Nie włączono powiadomień'); ui.quiet = true; render(); return; }
+  let pushed = false;
+  if (pushCapable() && auth.user && await pushInfo(true)) {
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64u(PUSH.pub) });
+      const j = sub.toJSON();
+      const { error } = await auth.sb.from('listo_push_subs').upsert({ endpoint: j.endpoint, user_id: auth.user.id, p256dh: j.keys.p256dh, auth: j.keys.auth, ua: navigator.userAgent.slice(0, 180) });
+      if (error) throw error;
+      pushed = true; REM.hash = ''; remSyncSoon(0);
+    } catch (e) { toast('Powiadomienia działają, gdy Listo jest otwarte (serwer: ' + String(e.message || e).slice(0, 60) + ')'); }
+  }
+  try { localStorage.setItem('listo-notif', pushed ? 'push' : 'local'); } catch (e) { /* */ }
+  remNotify({ id: 'test-on', title: '🔔 Powiadomienia włączone', body: pushed ? 'Przypomnę Ci o zadaniach także wtedy, gdy Listo jest zamknięte.' : 'Przypomnę Ci o zadaniach, gdy Listo jest otwarte.', url: './#today' });
+  ui.quiet = true; render();
+}
+async function notifyDisable() {
+  try {
+    const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration();
+    const sub = reg && await reg.pushManager?.getSubscription();
+    if (sub) { if (auth.sb) await auth.sb.from('listo_push_subs').delete().eq('endpoint', sub.endpoint); await sub.unsubscribe(); }
+  } catch (e) { /* */ }
+  try { localStorage.setItem('listo-notif', 'off'); } catch (e) { /* */ }
+  toast('Wyłączono powiadomienia push na tym urządzeniu'); ui.quiet = true; render();
+}
+// wysyłanie harmonogramu na serwer (serwer wyśle je o czasie, nawet przy zamkniętej aplikacji)
+let remSyncT = 0;
+function remSyncSoon(ms = 4000) { clearTimeout(remSyncT); remSyncT = setTimeout(remSync, ms); }
+async function remSync() {
+  if (!auth.user || !auth.sb || !(await pushInfo())) return;
+  const now = Date.now(), list = remSchedule(now + 20000, now + 21 * 864e5);
+  const hash = list.map(r => r.id + r.at + r.title).join('|');
+  if (hash === REM.hash) return;
+  const pre = auth.user.id.slice(0, 8) + '-';
+  try {
+    const del = await auth.sb.from('listo_reminders').delete().eq('user_id', auth.user.id).eq('sent', false);
+    if (del.error) throw del.error;
+    if (list.length) {
+      const { error } = await auth.sb.from('listo_reminders').upsert(list.slice(0, 400).map(r => ({ id: pre + r.id, tag: r.id, user_id: auth.user.id, task_id: r.task, fire_at: new Date(r.at).toISOString(), title: r.title, body: r.body, url: r.url, sent: false })), { onConflict: 'id', ignoreDuplicates: true });
+      if (error) throw error;
+    }
+    REM.hash = hash;
+  } catch (e) { /* spróbujemy przy następnej zmianie */ }
+}
+async function pushTest() {
+  if (!auth.user || !(await pushInfo(true))) { toast('Serwer powiadomień nie jest jeszcze skonfigurowany'); return; }
+  const { error } = await auth.sb.from('listo_reminders').upsert({ id: auth.user.id.slice(0, 8) + '-test-' + Date.now(), tag: 'test', user_id: auth.user.id, task_id: null, fire_at: new Date(Date.now() + 5000).toISOString(), title: '🔔 Test z serwera Listo', body: 'Jeśli to widzisz, powiadomienia przy zamkniętej aplikacji działają.', url: './#today', sent: false });
+  toast(error ? 'Nie udało się: ' + error.message : 'Wysłano – powiadomienie przyjdzie w ciągu ok. minuty (możesz zamknąć aplikację)');
+}
+
+// ---------- Ustawienia → Powiadomienia ----------
+function notifyPrefsBody(sec) {
+  const s = state.settings, perm = 'Notification' in window ? Notification.permission : 'unsupported';
+  let mode = 'off'; try { mode = localStorage.getItem('listo-notif') || 'off'; } catch (e) { /* */ }
+  if (PUSH.ok === null && PUSH.url) pushInfo().then(ok => { if (ui.view.type === 'prefs' && ui.prefTab === 'notify') { ui.quiet = true; render(); } });
+  const permTxt = { granted: '<span class="ok-txt">Zezwolono</span>', denied: '<span class="neg">Zablokowane w przeglądarce</span>', default: 'Jeszcze nie włączono', unsupported: 'Niedostępne w tym oknie' }[perm];
+  const srv = !PUSH.url ? 'Wymaga konta (Supabase)' : PUSH.ok === null ? 'Sprawdzam…' : PUSH.ok ? '<span class="ok-txt">Gotowy</span>' : 'Nieskonfigurowany – patrz INSTRUKCJA.md, krok 6';
+  const pushOn = perm === 'granted' && mode === 'push';
+  return sec(0, 'To urządzenie', prefRow('Powiadomienia systemowe', permTxt, perm === 'granted' ? (pushOn ? `<button class="btn sm" data-act="notif-off">Wyłącz push</button>` : `<button class="btn sm primary" data-act="notif-on">${PUSH.ok && auth.user ? 'Włącz też przy zamkniętej' : 'Odśwież'}</button>`) : `<button class="btn sm primary" data-act="notif-on" ${perm === 'unsupported' && !isIOS() ? 'disabled' : ''}>${sz(I.bell, 14)} Włącz</button>`)
+      + prefRow('Gdy Listo jest zamknięte', pushOn ? '<span class="ok-txt">Włączone – serwer wyśle przypomnienia</span>' : !pushCapable() ? 'Niedostępne w tym oknie' : !auth.user ? 'Zaloguj się, aby dostawać je przy zamkniętej aplikacji' : 'Wyłączone', '')
+      + prefRow('Serwer powiadomień', srv, PUSH.ok && auth.user ? `<button class="btn sm" data-act="notif-test">Test z serwera</button>` : '')
+      + prefRow('Okienko w aplikacji', 'Przypomnienie z przyciskami Zrobione / Za 10 min', swBtn(s.remPopup !== false, 'remPopup'))
+      + prefRow('Powiadomienie testowe', 'Sprawdź, jak wygląda', `<button class="btn sm" data-act="notif-local">Pokaż</button>`)
+      + (isIOS() && !isStandalone() ? `<div class="sh-tip">${sz(I.bell, 15)}<span>Na iPhonie powiadomienia działają tylko w zainstalowanej aplikacji: Safari → Udostępnij → <b>Do ekranu początkowego</b>, potem otwórz Listo z ikony i włącz je tutaj.</span></div>` : ''))
+    + sec(1, 'Domyślne przypomnienia', `<p class="pf-p">Działają dla zadań bez własnych przypomnień. Własne ustawisz w oknie zadania (przycisk „Przypomnienia”).</p>`
+      + prefRow('Zadania z godziną', 'Ile przed terminem', segBtns('remTimed', s.remTimed, [[-1, 'Wył.'], [0, 'O czasie'], [10, '10 min'], [30, '30 min'], [60, '1 h']]))
+      + prefRow('Zadania bez godziny', 'O której w dniu terminu', segBtns('remAllDay', s.remAllDay || '', [['', 'Wył.'], ['07:00', '7:00'], ['08:00', '8:00'], ['09:00', '9:00'], ['12:00', '12:00']]))
+      + prefRow('Poranny plan dnia', 'Lista zadań na dziś (gdy jakieś są)', segBtns('remMorning', s.remMorning || '', [['', 'Wył.'], ['07:00', '7:00'], ['08:00', '8:00'], ['09:00', '9:00']])))
+    + sec(2, 'Najbliższe przypomnienia', (() => { const l = remSchedule(Date.now(), Date.now() + 3 * 864e5).slice(0, 8); return l.length ? l.map(r => `<div class="rem-row"><span class="rem-when">${fmtDateTime(r.at)}</span><span class="grow">${esc(r.title)}</span></div>`).join('') : '<div class="muted small" style="padding:6px 0">Brak przypomnień w najbliższych 3 dniach.</div>'; })());
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-act]')?.dataset.act;
+  if (a === 'notif-on') notifyEnable();
+  else if (a === 'notif-off') notifyDisable();
+  else if (a === 'notif-test') pushTest();
+  else if (a === 'notif-local') { const t = active().find(x => x.due) || active()[0]; const r = { id: 'demo-' + Date.now(), task: t?.id || null, title: t ? t.title : 'Przykładowe przypomnienie', body: t ? remBody(t) : 'Tak będą wyglądać przypomnienia', url: './#today' }; remNotify(r); remPopup(r); }
+});
+
+// pole „Przypomnienia” w oknie zadania + synchronizacja harmonogramu po zmianach
+const renderR = render;
+render = function () {
+  renderR();
+  const side = $('#modal-root .tm-side'), mt = ui.modal?.id && task(ui.modal.id);
+  if (side && mt && !mt.completed && !$('.rem-field', side)) {
+    const l = remList(mt);
+    const html = `<div class="side-field rem-field"><label>Przypomnienia</label><button class="side-btn" data-act="rem-pick" data-id="${mt.id}">${sz(I.bell, 16)} ${!mt.due ? 'Najpierw ustaw termin' : l.length ? l.map(remText).join(', ') + (l[0].def ? ' (domyślne)' : '') : 'Brak'}</button></div>`;
+    const anchor = $('.side-field:nth-child(3)', side);
+    if (anchor) anchor.insertAdjacentHTML('afterend', html); else side.insertAdjacentHTML('beforeend', html);
+  }
+  if (auth.user) remSyncSoon();
+};
+setTimeout(remTick, 3000);
 render();
 save();
 initSync();

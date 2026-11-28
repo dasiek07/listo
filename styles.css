@@ -2293,3 +2293,35 @@ body.pop-sheet::before { content: ""; position: fixed; inset: 0; z-index: 99; ba
 #launch.flow.out .lf-hud, #launch.flow.out .lf-word { transition: opacity .25s ease; opacity: 0; }
 #launch.flow.lite .lf-grain { display: none; }
 @media (max-width: 760px) { .lf-hud { font-size: 9px; } .lf-hud.tl { left: 18px; } .lf-hud.tr { right: 18px; } .lf-hud.bl { left: 18px; } .lf-hud.br { right: 18px; } .lf-bar { width: 120px; } .lf-word { bottom: 16vh; } }
+
+/* =====================================================================
+   v14 – przypomnienia
+   ===================================================================== */
+#rem-stack { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); right: 14px; z-index: 450; display: flex; flex-direction: column; gap: 10px; width: min(380px, calc(100vw - 28px)); pointer-events: none; }
+.rem-pop { pointer-events: auto; position: relative; overflow: hidden; display: flex; gap: 12px; align-items: flex-start; padding: 14px 12px 14px 14px; border-radius: 16px; background: color-mix(in srgb, var(--card) 96%, transparent); border: 1px solid var(--line-2); box-shadow: 0 14px 40px rgba(0,0,0,.35); animation: rem-in .45s var(--spring); }
+.rem-pop.out { animation: rem-out .26s ease forwards; }
+@keyframes rem-in { from { opacity: 0; transform: translateX(40px) scale(.96); } }
+@keyframes rem-out { to { opacity: 0; transform: translateX(40px); } }
+.rem-ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; flex: none; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent-text); animation: bell-ring 1s ease .2s; transform-origin: 50% 20%; }
+@keyframes bell-ring { 10%, 30%, 50% { transform: rotate(14deg); } 20%, 40% { transform: rotate(-14deg); } 60% { transform: none; } }
+.rem-pop .grow { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rem-pop b { font-size: 14px; line-height: 1.3; }
+.rem-pop span { font-size: 12.5px; color: var(--text-2); }
+.rem-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.rem-x { width: 26px; height: 26px; flex: none; }
+.rem-bar { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--accent); transform-origin: left; animation: rem-time 15s linear forwards; opacity: .7; }
+.rem-pop.hold .rem-bar { animation-play-state: paused; }
+@keyframes rem-time { to { transform: scaleX(0); } }
+.meta-item.rem-meta { color: var(--due-tomorrow); }
+.rem-menu { width: 290px; }
+.rem-cur { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 8px; font-size: 13px; }
+.rem-cur span { display: inline-flex; align-items: center; gap: 6px; }
+.rem-cur em { font-style: normal; font-size: 11px; color: var(--muted); }
+.rem-cur .icon-btn { width: 24px; height: 24px; }
+.rem-custom { display: flex; gap: 6px; padding: 6px 8px; }
+.rem-time { flex: 1; height: 30px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--bg); color: var(--text); padding: 0 8px; }
+.menu-item[disabled] { opacity: .45; pointer-events: none; }
+.rem-row { display: flex; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.rem-row:first-child { border-top: 0; }
+.rem-when { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 760px) { #rem-stack { top: auto; bottom: calc(86px + env(safe-area-inset-bottom, 0px)); right: 12px; left: 12px; width: auto; } @keyframes rem-in { from { opacity: 0; transform: translateY(30px) scale(.96); } } }

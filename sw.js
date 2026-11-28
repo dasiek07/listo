@@ -22,3 +22,26 @@ self.addEventListener('fetch', e => {
   e.respondWith(fetch(e.request).then(r => { if (r.ok) { const copy = r.clone(); caches.open(VERSION).then(c => c.put(e.request, copy)); } return r; })
     .catch(() => caches.match(e.request).then(r => r || caches.match('index.html'))));
 });
+
+// ---------- powiadomienia push (przypomnienia z serwera, gdy aplikacja jest zamknięta) ----------
+self.addEventListener('push', e => {
+  let d = {};
+  try { d = e.data ? e.data.json() : {}; } catch (err) { d = { title: 'Listo', body: e.data ? e.data.text() : '' }; }
+  const opts = {
+    body: d.body || '', tag: d.tag || 'listo', icon: 'icon-192.png', badge: 'icon-192.png', renotify: false,
+    data: { url: d.url || './#today', task: d.task || null },
+    actions: d.task ? [{ action: 'done', title: 'Zrobione' }, { action: 'snooze', title: 'Za 10 min' }] : [],
+  };
+  e.waitUntil(self.registration.showNotification(d.title || 'Listo', opts));
+});
+self.addEventListener('notificationclick', e => {
+  const d = e.notification.data || {}, act = e.action || '';
+  e.notification.close();
+  const url = new URL(d.url || './#today', self.registration.scope);
+  if (d.task) { url.searchParams.set('task', d.task); if (act) url.searchParams.set('act', act); }
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    const c = cs.find(x => x.url.startsWith(self.registration.scope));
+    if (c) { if (d.task) c.postMessage({ type: 'listo-notif', task: d.task, act }); return c.focus(); }
+    return self.clients.openWindow(url.href);
+  }));
+});

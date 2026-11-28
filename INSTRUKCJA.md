@@ -87,3 +87,21 @@ i nowy instalator w *Releases*. Telefony same pobiorą nową wersję przy nastę
   a jeśli projekt się wstrzyma – w panelu Supabase kliknij *Restore*. Dane nie znikają.
 - Aplikacja działa także **offline** – zmiany wyślą się, gdy wróci internet.
 - Wersja w claude.ai i skróty na tym komputerze nadal działają niezależnie (osobne dane).
+
+---
+
+## Krok 6. Powiadomienia przy zamkniętej aplikacji (ok. 5 min, jednorazowo)
+
+Przypomnienia działają od razu, gdy Listo jest otwarte. Żeby przychodziły też na zamkniętą aplikację
+(telefon, komputer), Supabase musi je wysyłać – służy do tego mała funkcja `listo-push`.
+
+1. W Supabase: **Edge Functions → Deploy a new function → Via Editor**.
+2. Nazwa funkcji: **`listo-push`** (dokładnie tak).
+3. Usuń przykładowy kod, wklej całą zawartość pliku `supabase/functions/listo-push/index.ts` → **Deploy function**.
+4. Po wdrożeniu otwórz funkcję → **Details** (lub *Settings*) → wyłącz **Verify JWT** / *Enforce JWT verification* → zapisz.
+   (Funkcja sama sprawdza tajny klucz harmonogramu – nikt z zewnątrz nie może jej wywołać do wysyłki.)
+5. **SQL Editor → New query** → wklej całość `supabase/push.sql` → **Run**.
+   Tworzy tabele (każdy widzi tylko swoje dane) i harmonogram, który co minutę wywołuje funkcję.
+6. W Listo: **Ustawienia → Powiadomienia → Włącz** (na każdym urządzeniu osobno).
+   Na iPhonie najpierw zainstaluj Listo z Safari („Do ekranu początkowego”) i włącz powiadomienia w aplikacji otwartej z ikony.
+7. Kliknij **Test z serwera** i zamknij aplikację – powiadomienie przyjdzie w ciągu ok. minuty.
