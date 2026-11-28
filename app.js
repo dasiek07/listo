@@ -3899,162 +3899,102 @@ function voiceClose() {
 // ---------- ekran startowy ----------
 function showSplash(force) {
   if (!force && (!freshLaunch || state.settings.splash === false || REDUCED || state.settings.anim === 'off')) return;
-  // Abstrakcyjne pole przepływu: tysiące cząsteczek z rozmyciem ruchu, które zbiegają się w znaczek Listo
   const hr = new Date().getHours(), name = state.settings.userName || '';
   const greet = hr < 5 ? 'Dobrej nocy' : hr < 12 ? 'Dzień dobry' : hr < 18 ? 'Miłego popołudnia' : 'Dobry wieczór';
-  const now0 = new Date(), td = todayStr();
-  const nToday = active().filter(t => t.due && t.due <= td).length;
-  const stamp = `${pad(now0.getDate())}.${pad(now0.getMonth() + 1)}.${now0.getFullYear()} ${pad(now0.getHours())}:${pad(now0.getMinutes())}`;
+  const now = new Date();
+  const dateTxt = `${cap(PL_DAYS[now.getDay()])}, ${now.getDate()} ${PL_MON_SHORT[now.getMonth()]}`;
+  const td = todayStr(), act = active();
+  const nToday = act.filter(t => t.due && t.due <= td).length;
+  const rows = [['var(--p1)', 64], ['var(--p2)', 48], ['var(--p3)', 72]];
   const el = document.createElement('div');
   el.id = 'launch';
-  el.className = 'flow';
-  el.innerHTML = `<canvas class="lf-cv" aria-hidden="true"></canvas><div class="lf-glow" aria-hidden="true"></div><div class="lf-grain" aria-hidden="true"></div><div class="lf-vig" aria-hidden="true"></div>
-    <div class="lf-hud tl"><b>LISTO</b><span>FLOW FIELD // v3</span><span class="lf-seed">SEED 0x0000</span></div>
-    <div class="lf-hud tr"><span>${stamp}</span><span class="lf-cnt">PARTICLES 0000</span><span class="lf-fr">FRAME 0000</span></div>
-    <div class="lf-hud bl"><span class="lf-st">INIT // VECTOR FIELD</span><span class="lf-bar"><i></i></span></div>
-    <div class="lf-hud br"><span>${nToday} ${nToday === 1 ? 'TASK' : 'TASKS'} // TODAY</span><span>SYNC ${sync.ref ? 'LINKED' : 'LOCAL'}</span></div>
-    <div class="lf-word"><span class="lf-name">${'LISTO'.split('').map((c, i) => `<i style="--i:${i}">${c}</i>`).join('')}</span><span class="lf-sub">${esc(greet)}${name ? ', ' + esc(name) : ''}</span></div>
+  el.innerHTML = `<canvas class="ls-stars" aria-hidden="true"></canvas>
+    <div class="ls-aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div class="ls-grid" aria-hidden="true"></div>
+    <div class="ls-stage">
+      <div class="ls-hold">
+        <div class="ls-rows">${rows.map(([c, w], i) => `<div class="ls-row" style="--i:${i};--c:${c};--w:${w}%"><span class="ls-ck"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg></span><span class="ls-line"><i></i></span></div>`).join('')}</div>
+        <div class="ls-logo"><span class="ls-wave"></span><span class="ls-wave w2"></span><span class="ls-wave w3"></span>
+          <svg viewBox="0 0 64 64" aria-hidden="true"><defs><linearGradient id="lsg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff7a59"/><stop offset=".55" stop-color="var(--accent)"/><stop offset="1" stop-color="#b23a6a"/></linearGradient></defs>
+            <rect class="ls-sq" x="4" y="4" width="56" height="56" rx="17" fill="url(#lsg)"/><rect class="ls-shine" x="4" y="4" width="56" height="56" rx="17"/><path class="ls-ckp" d="M19 33.5l8.5 8.5L45.5 24"/></svg></div>
+      </div>
+      <div class="ls-name">${'Listo'.split('').map((c, i) => `<span style="--i:${i}">${c}</span>`).join('')}</div>
+      <div class="ls-sub"><b>${greet}${name ? ', ' + esc(name) : ''}</b><span>${dateTxt} · ${nToday ? `${nToday} ${plural(nToday, 'zadanie', 'zadania', 'zadań')} na dziś` : 'dzień bez zaległości'}</span></div>
+      <div class="ls-load"><div class="ls-bar"><i></i></div><span class="ls-status">Budzę aplikację…</span></div>
+    </div>
     <div class="ls-skip">Kliknij, aby pominąć</div>`;
   document.body.appendChild(el);
   const app = $('#app');
+  // aplikacja rysuje się pod spodem raz, a jej animacje wejścia czekają wstrzymane – bez przeładowania po animacji
   app.classList.add('app-pre', 'launch', 'launch-wait');
   const lite = innerWidth < 760 || matchMedia('(pointer: coarse)').matches;
   el.classList.toggle('lite', lite);
-
-  const cv = $('.lf-cv', el), cx = cv.getContext('2d', { alpha: false });
-  const DPR = Math.min(devicePixelRatio || 1, lite ? 1 : 1.5);
-  let W = 0, H = 0, S = 0;
-  const fit = () => { W = cv.width = Math.round(innerWidth * DPR); H = cv.height = Math.round(innerHeight * DPR); S = Math.min(W, H) * .36; cx.fillStyle = '#000'; cx.fillRect(0, 0, W, H); };
+  // gwiazdy / pyłki w tle
+  const cv = $('.ls-stars', el), cx = cv.getContext('2d');
+  let W, H, raf = 0, alive = true;
+  const fit = () => { const r = Math.min(devicePixelRatio || 1, lite ? 1 : 2); W = cv.width = innerWidth * r; H = cv.height = innerHeight * r; };
   fit();
-  // kształt docelowy: znaczek (dwa odcinki), w jednostkach znormalizowanych
-  const CK = [[-.7, -.02], [-.2, .46], [.74, -.53]];
-  const segs = [[CK[0], CK[1]], [CK[1], CK[2]]].map(([a, b]) => ({ a, b, l: Math.hypot(b[0] - a[0], b[1] - a[1]) }));
-  const totL = segs.reduce((s, g) => s + g.l, 0);
-  const onCheck = () => {
-    let r = Math.random() * totL, g = segs[0];
-    for (const s of segs) { if (r <= s.l) { g = s; break; } r -= s.l; }
-    const k = r / g.l, nx = -(g.b[1] - g.a[1]) / g.l, ny = (g.b[0] - g.a[0]) / g.l, j = (Math.random() - .5) * .16 * (Math.random() < .8 ? 1 : 2.6);
-    return [g.a[0] + (g.b[0] - g.a[0]) * k + nx * j, g.a[1] + (g.b[1] - g.a[1]) * k + ny * j, (Math.random() - .5) * .22];
-  };
-  const N = lite ? 1800 : 5200;
-  const P = new Float32Array(N * 10); // x y z vx vy vz tx ty tz kind
-  const seed = Math.random() * 1000;
-  const AX = [1.25, .74, .86];
-  const LIFE = new Float32Array(N);
-  const spawn = (i, spray) => {
-    const o = i * 10, u = Math.random() * 6.283, v = Math.acos(2 * Math.random() - 1), r = spray ? 1 : .9 + Math.random() * .14;
-    P[o] = Math.sin(v) * Math.cos(u) * r * AX[0]; P[o + 1] = Math.cos(v) * r * AX[1]; P[o + 2] = Math.sin(v) * Math.sin(u) * r * AX[2];
-    P[o + 3] = P[o + 4] = P[o + 5] = 0;
-    const t = onCheck(); P[o + 6] = t[0]; P[o + 7] = t[1]; P[o + 8] = t[2];
-    P[o + 9] = spray ? 1 : 0;
-    LIFE[i] = spray ? .4 + Math.random() * 1.1 : 0;
-  };
-  for (let i = 0; i < N; i++) spawn(i, i % 9 === 0);
-  // pseudo-wirowe pole przepływu (tanie, organiczne)
-  const flow = (x, y, z, t) => [
-    Math.sin(y * 1.7 + t * .9 + seed) + Math.cos(z * 2.3 - t * .6) * .6 + Math.sin((x + y) * 3.1 + t) * .25,
-    Math.sin(z * 1.9 - t * .7) + Math.cos(x * 2.1 + t * .8 + seed) * .6 + Math.sin((y - z) * 2.9 - t) * .25,
-    Math.sin(x * 1.5 + t * .5) + Math.cos(y * 2.7 + t * .4 + seed) * .6,
-  ];
-  // falująca powierzchnia bryły
-  const surf = (nx, ny, nz, t) => 1 + .2 * Math.sin(nx * 3 + t * 1.3 + seed) * Math.cos(ny * 2.2 - t * .9) + .11 * Math.sin(nz * 5 + t * 2.1) + .06 * Math.sin((nx - ny) * 7 - t * 2.6);
-  const t0 = performance.now();
-  const T_FORM = lite ? 1.5 : 1.75, T_EXIT = lite ? 3.3 : 3.75;
-  let rot = .6, raf = 0, alive = true, last = t0, frame = 0, exploding = false, acc = 0;
-  const hudF = $('.lf-fr', el), hudC = $('.lf-cnt', el), hudS = $('.lf-seed', el);
-  hudS.textContent = 'SEED 0x' + Math.floor(seed * 65).toString(16).toUpperCase().padStart(4, '0');
-  const Lx = -.45, Ly = -.6, Lz = -.66; // kierunek światła (z góry, z lewej, od widza)
-  const ALPHA = ['rgba(255,255,255,.035)', 'rgba(255,255,255,.075)', 'rgba(255,255,255,.13)', 'rgba(255,255,255,.2)', 'rgba(255,255,255,.3)'];
-  const step = (h, T, fe) => {
-    for (let i = 0; i < N; i++) {
-      const o = i * 10;
-      const x = P[o], y = P[o + 1], z = P[o + 2], spray = P[o + 9] === 1;
-      const qx = x / AX[0], qy = y / AX[1], qz = z / AX[2], d = Math.hypot(qx, qy, qz) + 1e-4;
-      const nx = qx / d, ny = qy / d, nz = qz / d;
-      const f = flow(x, y, z, T), fd = f[0] * nx + f[1] * ny + f[2] * nz;
-      let rt;
-      if (spray) { LIFE[i] -= h; rt = 1 + (1.5 - LIFE[i]) * .9; if (LIFE[i] <= 0 && !exploding) { spawn(i, true); continue; } }
-      else rt = surf(nx, ny, nz, T);
-      const rad = (rt - d) * (spray ? 2.2 : 3.2);
-      let dx = (f[0] - nx * fd) * .78 + nx * rad * AX[0], dy = (f[1] - ny * fd) * .78 + ny * rad * AX[1], dz = (f[2] - nz * fd) * .78 + nz * rad * AX[2];
-      if (fe > 0 && !exploding) {
-        const k = 5.5;
-        const keep = .28 + (1 - fe) * .45; dx = dx * keep + (P[o + 6] - x) * k * fe; dy = dy * keep + (P[o + 7] - y) * k * fe; dz = dz * keep + (P[o + 8] - z) * k * fe;
-      }
-      if (exploding) { dx += nx * 6; dy += ny * 6; dz += nz * 6; }
-      const sm = .1 + fe * .14; P[o + 3] += (dx - P[o + 3]) * sm; P[o + 4] += (dy - P[o + 4]) * sm; P[o + 5] += (dz - P[o + 5]) * sm;
-      const sp = Math.hypot(P[o + 3], P[o + 4], P[o + 5]), cap = exploding ? 9 : 2.1 + fe * 2.6; if (sp > cap) { P[o + 3] *= cap / sp; P[o + 4] *= cap / sp; P[o + 5] *= cap / sp; }
-      P[o] = x + P[o + 3] * h; P[o + 1] = y + P[o + 4] * h; P[o + 2] = z + P[o + 5] * h;
-    }
-  };
-  const draw = now => {
+  const dots = [...Array(lite ? 36 : 90)].map(() => ({ x: Math.random(), y: Math.random(), r: Math.random() * 1.6 + .3, s: Math.random() * .00025 + .00008, p: Math.random() * 6.28 }));
+  const sparks = [];
+  const draw = t => {
     if (!alive) return;
-    const rdt = Math.min(.1, (now - last) / 1000); last = now;
-    const T = (now - t0) / 1000;
-    const form = Math.max(0, Math.min(1, (T - T_FORM) / .95)), fe = form * form * (3 - 2 * form);
-    // stały krok fizyki – ten sam wygląd przy 30 i 144 kl./s
-    acc += rdt; let n = 0;
-    while (acc >= 1 / 60 && n < 4) { step(1 / 60, T, fe); acc -= 1 / 60; n++; }
-    if (n === 4) acc = 0;
-    rot += rdt * (.9 - fe * .75);
-    const rr = 1 - fe, cr = Math.cos(rot) * rr + fe, sr = Math.sin(rot) * rr;
-    // rozmycie ruchu: zostawiamy półprzezroczysty ślad poprzednich klatek
-    cx.globalCompositeOperation = 'source-over';
-    cx.fillStyle = `rgba(0,0,0,${exploding ? .2 : .085 + fe * .07})`;
-    cx.fillRect(0, 0, W, H);
-    cx.globalCompositeOperation = 'lighter';
-    const ox = W / 2, oy = H / 2 - H * .02, F = 2.8, SC = S * 1.12, TR = .055;
-    const B = [new Path2D(), new Path2D(), new Path2D(), new Path2D(), new Path2D()];
-    for (let i = 0; i < N; i++) {
-      const o = i * 10, x = P[o], y = P[o + 1], z = P[o + 2], vx = P[o + 3], vy = P[o + 4], vz = P[o + 5];
-      // obrót widoku wokół osi pionowej + perspektywa
-      const xr = x * cr - z * sr, zr = x * sr + z * cr;
-      const p = F / (F + zr);
-      const X = ox + xr * p * SC, Y = oy + y * p * SC;
-      const bx = x - vx * TR, by = y - vy * TR, bz = z - vz * TR;
-      const bxr = bx * cr - bz * sr, bzr = bx * sr + bz * cr, pb = F / (F + bzr);
-      // cieniowanie: normalna powierzchni względem światła
-      const qx = x / AX[0], qy = y / AX[1], qz = z / AX[2], dd = Math.hypot(qx, qy, qz) + 1e-4;
-      const nxr = (qx * cr - qz * sr) / dd, nyr = qy / dd, nzr = (qx * sr + qz * cr) / dd;
-      let lum = Math.max(0, nxr * Lx + nyr * Ly + nzr * Lz) * 1.15 + .08;
-      if (nzr > .15) lum *= .35;               // tylna strona bryły
-      if (P[o + 9] === 1) lum = .45 + lum * .3; // pył wokół
-      lum = lum * (1 - fe) + .78 * fe;
-      const b = B[lum < .18 ? 0 : lum < .38 ? 1 : lum < .58 ? 2 : lum < .8 ? 3 : 4];
-      b.moveTo(ox + bxr * pb * SC, oy + by * pb * SC); b.lineTo(X, Y);
+    cx.clearRect(0, 0, W, H);
+    dots.forEach(d => {
+      d.y -= d.s; if (d.y < -.02) { d.y = 1.02; d.x = Math.random(); }
+      cx.globalAlpha = .25 + .55 * (.5 + .5 * Math.sin(t / 700 + d.p));
+      cx.fillStyle = '#ffffff'; cx.beginPath(); cx.arc(d.x * W, d.y * H, d.r * (devicePixelRatio || 1), 0, 6.283); cx.fill();
+    });
+    for (let i = sparks.length - 1; i >= 0; i--) {
+      const s = sparks[i]; s.x += s.vx; s.y += s.vy; s.vy += .06; s.l -= .018;
+      if (s.l <= 0) { sparks.splice(i, 1); continue; }
+      cx.globalAlpha = s.l; cx.fillStyle = s.c; cx.beginPath(); cx.arc(s.x, s.y, s.r, 0, 6.283); cx.fill();
     }
-    cx.lineWidth = DPR * (lite ? 1.3 : 1.15);
-    cx.lineCap = 'round';
-    for (let k = 0; k < 5; k++) { cx.strokeStyle = ALPHA[k]; cx.stroke(B[k]); }
-    frame++;
-    if (frame % 3 === 0) { hudF.textContent = 'FRAME ' + String(frame).padStart(4, '0'); hudC.textContent = 'PARTICLES ' + N + ' // ' + Math.round(1 / Math.max(rdt, .001)) + ' FPS'; }
+    cx.globalAlpha = 1;
     raf = requestAnimationFrame(draw);
   };
   raf = requestAnimationFrame(draw);
-
+  const burst = (node, color, n = 22) => {
+    if (!node || !alive) return;
+    const r = node.getBoundingClientRect(), k = devicePixelRatio || 1;
+    const x = (r.left + r.width / 2) * k, y = (r.top + r.height / 2) * k;
+    for (let i = 0; i < n; i++) { const a = Math.random() * 6.283, v = (Math.random() * 3.2 + 1.2) * k; sparks.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 1.5 * k, r: (Math.random() * 2.2 + 1) * k, l: 1, c: color }); }
+  };
+  const css = getComputedStyle(document.documentElement);
+  const pc = ['--p1', '--p2', '--p3'].map(v => css.getPropertyValue(v).trim() || '#ff7066');
   const timers = [];
   const at = (ms, fn) => timers.push(setTimeout(fn, ms));
-  const st = $('.lf-st', el);
-  at(500, () => { st.textContent = 'SOLVING // CURL FLOW'; });
-  at(T_FORM * 1000, () => { st.textContent = 'CONVERGE // ' + (sync.ref ? 'SYNCING TASKS' : 'LOADING TASKS'); el.classList.add('form'); });
-  at(T_FORM * 1000 + 700, () => { el.classList.add('word'); });
-  at(T_EXIT * 1000 - 300, () => { st.textContent = 'READY'; el.classList.add('ready'); });
+  $$('.ls-row', el).forEach((row, i) => at(820 + i * 260, () => { row.classList.add('done'); burst($('.ls-ck', row), pc[i]); }));
+  at(1720, () => burst($('.ls-logo', el), css.getPropertyValue('--accent').trim() || '#dc4c3e', 46));
+  const st = $('.ls-status', el);
+  at(900, () => { st.textContent = 'Układam Twoje zadania…'; });
+  at(1800, () => { st.textContent = sync.ref ? 'Synchronizuję z chmurą…' : 'Przygotowuję widok…'; });
+  at(2650, () => { st.textContent = 'Gotowe ✓'; el.classList.add('ready'); });
   let out = false;
   const done = () => {
     if (out) return; out = true;
     timers.forEach(clearTimeout);
-    exploding = true;
     launchIntroPrep();
+    // logo odlatuje na swoje miejsce w aplikacji
+    const logo = $('.ls-logo', el), lr = logo.getBoundingClientRect();
+    const tgt = [...$$('#sidebar .add-circle, #tabbar [data-view="home"] svg, .hm-greet h1')].find(n => { const r = n.getBoundingClientRect(); return r.width && r.left >= 0 && r.left < innerWidth; });
+    if (tgt && lr.width) {
+      const fly = logo.cloneNode(true); fly.className = 'ls-fly'; document.body.appendChild(fly);
+      Object.assign(fly.style, { left: lr.left + 'px', top: lr.top + 'px', width: lr.width + 'px', height: lr.height + 'px' });
+      const tr = tgt.getBoundingClientRect(), s = Math.max(.18, Math.min(tr.width, tr.height) / lr.width);
+      requestAnimationFrame(() => requestAnimationFrame(() => { fly.style.transform = `translate(${tr.left + tr.width / 2 - (lr.left + lr.width / 2)}px, ${tr.top + tr.height / 2 - (lr.top + lr.height / 2)}px) scale(${s})`; fly.classList.add('go'); }));
+      setTimeout(() => { fly.remove(); tgt.classList.add('ls-land'); setTimeout(() => tgt.classList.remove('ls-land'), 700); }, 900);
+      logo.style.visibility = 'hidden';
+    }
     el.classList.add('out');
     app.classList.remove('app-pre', 'launch-wait');
     setTimeout(countUp, 900);
-    setTimeout(() => { alive = false; cancelAnimationFrame(raf); el.remove(); }, 900);
+    setTimeout(() => { alive = false; cancelAnimationFrame(raf); el.remove(); }, 1100);
     setTimeout(() => app.classList.remove('launch'), 3400);
   };
   el.addEventListener('click', done);
   addEventListener('keydown', function sk(e) { if (out) { removeEventListener('keydown', sk); return; } if (['Escape', 'Enter', ' '].includes(e.key)) { e.preventDefault(); done(); } });
-  addEventListener('resize', () => { if (alive) fit(); });
-  at(T_EXIT * 1000, done);
+  addEventListener('resize', fit);
+  at(3150, done);
 }
 
 // ---------- obsługa kliknięć nowych elementów ----------
